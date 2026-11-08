@@ -111,3 +111,34 @@ def test_cors_unapproved_origin_not_granted():
     r = _cors_response(client, "http://evil.example.com")
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") is None
+
+# --- Configured production CORS origins (Pass 6B) ---
+
+def test_cors_accepts_configured_production_origin(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com/, https://admin.example.com")
+    import importlib, backend.main as main_mod
+    app_mod = importlib.reload(main_mod)
+    client = TestClient(app_mod.app)
+    r = client.get("/api/executions", headers={"Origin": "https://app.example.com"})
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "https://app.example.com"
+
+
+def test_cors_rejects_unlisted_origin_when_configured(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+    import importlib, backend.main as main_mod
+    app_mod = importlib.reload(main_mod)
+    client = TestClient(app_mod.app)
+    r = client.get("/api/executions", headers={"Origin": "https://evil.example.com"})
+    assert r.headers.get("access-control-allow-origin") is None
+
+
+def test_cors_never_uses_wildcard_when_configured(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "*, https://app.example.com")
+    import importlib, backend.main as main_mod
+    app_mod = importlib.reload(main_mod)
+    client = TestClient(app_mod.app)
+    r = client.get("/api/executions", headers={"Origin": "https://app.example.com"})
+    assert r.headers.get("access-control-allow-origin") == "https://app.example.com"
+    r2 = client.get("/api/executions", headers={"Origin": "https://other.example.com"})
+    assert r2.headers.get("access-control-allow-origin") is None

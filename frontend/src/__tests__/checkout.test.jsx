@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, within, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import App from "../App.jsx";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  cleanup();
-});
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    cleanup();
+  });
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;

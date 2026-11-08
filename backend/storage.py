@@ -1,12 +1,28 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parents[1] / "executions.db"
+_DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "executions.db"
+
+
+def db_path() -> Path:
+    raw = os.getenv("INTENT_CART_DB_PATH", "").strip()
+    path = Path(raw).expanduser() if raw else _DEFAULT_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _connect() -> sqlite3.Connection:
+    return sqlite3.connect(db_path())
+
+
+# Backward-compatible alias; callers should prefer db_path().
+DB_PATH = _DEFAULT_DB_PATH
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, timestamp TEXT, mandate TEXT, results TEXT, session_id TEXT)"
     )
@@ -22,7 +38,7 @@ def init_db():
 
 def save_execution(execution_id, timestamp, mandate, results, session_id=None):
     init_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "INSERT INTO executions (execution_id, timestamp, mandate, results, session_id) VALUES (?,?,?,?,?)",
         (execution_id, timestamp, json.dumps(mandate), json.dumps(results), session_id),
@@ -33,7 +49,7 @@ def save_execution(execution_id, timestamp, mandate, results, session_id=None):
 
 def list_executions():
     init_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute(
         "SELECT execution_id, timestamp, session_id, json_array_length(results) FROM executions ORDER BY timestamp DESC"
     ).fetchall()
@@ -46,7 +62,7 @@ def list_executions():
 
 def get_execution(execution_id):
     init_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute(
         "SELECT execution_id, timestamp, mandate, results, session_id FROM executions WHERE execution_id=?",
         (execution_id,),
@@ -58,7 +74,7 @@ def get_execution(execution_id):
 
 
 def init_payments():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS payments (id TEXT PRIMARY KEY, session_id TEXT, execution_id TEXT, offer_id TEXT, paypal_order_id TEXT, status TEXT, amount REAL, currency TEXT, mandate_ref TEXT, idempotency_key TEXT UNIQUE, created_at TEXT, capture_id TEXT, captured_amount REAL, captured_currency TEXT, captured_at TEXT)"
     )
@@ -73,7 +89,7 @@ def init_payments():
 
 def save_payment(record):
     init_payments()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "INSERT OR IGNORE INTO payments (id, session_id, execution_id, offer_id, paypal_order_id, status, amount, currency, mandate_ref, idempotency_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (record["id"], record["session_id"], record["execution_id"], record["offer_id"], record["paypal_order_id"], record["status"], record["amount"], record["currency"], record["mandate_ref"], record["idempotency_key"], record["created_at"]),
@@ -84,7 +100,7 @@ def save_payment(record):
 
 def get_payment_by_key(key):
     init_payments()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute("SELECT id, paypal_order_id, status, amount, currency FROM payments WHERE idempotency_key=?", (key,)).fetchone()
     conn.close()
     if not row:
@@ -94,7 +110,7 @@ def get_payment_by_key(key):
 
 def get_payment_by_id(payment_id):
     init_payments()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute("SELECT id, session_id, execution_id, offer_id, paypal_order_id, status, amount, currency, mandate_ref, idempotency_key, capture_id, captured_amount, captured_currency FROM payments WHERE id=?", (payment_id,)).fetchone()
     conn.close()
     return {"id": row[0], "session_id": row[1], "execution_id": row[2], "offer_id": row[3], "paypal_order_id": row[4], "status": row[5], "amount": row[6], "currency": row[7], "mandate_ref": row[8], "idempotency_key": row[9], "capture_id": row[10], "captured_amount": row[11], "captured_currency": row[12]}
@@ -102,14 +118,14 @@ def get_payment_by_id(payment_id):
 
 def update_payment_capture(payment_id, capture_id, amount, currency, status="PAYMENT_CAPTURED"):
     init_payments()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("UPDATE payments SET capture_id=?, captured_amount=?, captured_currency=?, status=?, captured_at=? WHERE id=?", (capture_id, amount, currency, status, __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), payment_id))
     conn.commit()
     conn.close()
 
 
 def init_sessions():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("""CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
         category TEXT,
@@ -124,7 +140,7 @@ def init_sessions():
 
 def save_session(session_id, category, query, mandate, locked, locked_mandate=None, structured_filters=None):
     init_sessions()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("INSERT OR REPLACE INTO sessions (session_id,category,query,mandate,locked_mandate,locked,structured_filters) VALUES (?,?,?,?,?,?,?)",
         (session_id, category, query, json.dumps(mandate), json.dumps(locked_mandate) if locked_mandate else None, 1 if locked else 0, json.dumps(structured_filters) if structured_filters is not None else None))
     conn.commit()
@@ -132,7 +148,7 @@ def save_session(session_id, category, query, mandate, locked, locked_mandate=No
 
 def get_session(session_id):
     init_sessions()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute("SELECT session_id,category,query,mandate,locked_mandate,locked,structured_filters FROM sessions WHERE session_id=?", (session_id,)).fetchone()
     conn.close()
     if not row:

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { apiFetch } from "./api/client.js";
 
 const CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID || "sb";
 
@@ -44,7 +45,7 @@ export default function PayPalButton({ sessionId, executionId, offerId, decision
         setLoading(true);
         onLoadingChange?.(true);
         try {
-          const res = await fetch("http://127.0.0.1:8000/api/orders/checkout", {
+          const res = await apiFetch("/api/orders/checkout", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: sessionId, execution_id: executionId, offer_id: offerId }),
@@ -64,7 +65,7 @@ export default function PayPalButton({ sessionId, executionId, offerId, decision
         }
       },
       onApprove: async (data) => {
-        const payRes = await fetch("http://127.0.0.1:8000/api/orders/capture", {
+        const payRes = await apiFetch("/api/orders/capture", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ payment_id: paymentIdRef.current }),

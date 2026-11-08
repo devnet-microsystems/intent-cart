@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, save_session, get_session, list_executions
@@ -16,14 +17,26 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="INTENT CART")
 
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    if not raw.strip():
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ]
+    origins = []
+    for part in raw.split(","):
+        origin = part.strip().rstrip("/")
+        if origin and origin != "*":
+            origins.append(origin)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

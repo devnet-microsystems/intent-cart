@@ -5,6 +5,7 @@ import { themeQuartz, colorSchemeDarkBlue, ModuleRegistry, AllCommunityModule } 
 ModuleRegistry.registerModules([AllCommunityModule]);
 import StatusPill from "./StatusPill.jsx";
 import PayPalButton from "./PayPalButton.jsx";
+import { apiFetch } from "./api/client.js";
 import "./App.css";
 
 const intentCartTheme = themeQuartz
@@ -104,7 +105,7 @@ export default function App() {
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch("http://127.0.0.1:8000/api/executions");
+        const res = await apiFetch("/api/executions");
         if (!res.ok) throw new Error("Failed to load executions");
         const list = await res.json();
         if (cancelled) return;
@@ -114,7 +115,7 @@ export default function App() {
           const withResults = list.filter((e) => (e.results_count ?? 0) > 0);
           if (withResults.length > 0) {
             const toLoad = withResults[0];
-            const detailRes = await fetch(`http://127.0.0.1:8000/api/executions/${toLoad.execution_id}`);
+            const detailRes = await apiFetch(`/api/executions/${toLoad.execution_id}`);
             if (!detailRes.ok) throw new Error("Failed to load execution");
             const detail = await detailRes.json();
             if (cancelled) return;
@@ -165,7 +166,7 @@ export default function App() {
         max_price: filters.max_price === "" ? null : Number(filters.max_price),
         currency: filters.currency || "EUR",
       } : null;
-      const res = await fetch("http://127.0.0.1:8000/api/intent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: searchText, category, structured_filters: structured }) });
+      const res = await apiFetch("/api/intent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: searchText, category, structured_filters: structured }) });
       if (!res.ok) throw new Error("Intent extraction failed");
       const data = await res.json();
       if (import.meta.env.DEV) {
@@ -187,7 +188,7 @@ export default function App() {
     if (!sessionId) return;
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/mandate/${sessionId}/lock`, { method: "POST" });
+      const res = await apiFetch(`/api/mandate/${sessionId}/lock`, { method: "POST" });
       if (!res.ok) throw new Error("Lock failed");
       const data = await res.json();
       setMandate(data.mandate);
@@ -206,7 +207,7 @@ export default function App() {
     setBusy(true); setError(null);
     setSelected(null);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/search/${sessionId}`, { method: "POST" });
+      const res = await apiFetch(`/api/search/${sessionId}`, { method: "POST" });
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
       const normalized = (data.results || []).map((r, i) => ({ ...normalizeResult(r), execution_id: data.execution_id }));
@@ -231,7 +232,7 @@ export default function App() {
   const selectExecution = async (id) => {
     try {
       setLoading(true);
-      const res = await fetch(`http://127.0.0.1:8000/api/executions/${id}`);
+      const res = await apiFetch(`/api/executions/${id}`);
       if (!res.ok) throw new Error("Failed to load execution");
       const detail = await res.json();
           setCurrent(detail);

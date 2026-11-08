@@ -86,6 +86,12 @@ uvicorn backend.main:app --reload
 
 Health check: `GET http://127.0.0.1:8000/health`
 
+Production-compatible startup (bind/port provided by host; keeps local default behavior):
+
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
 ### Frontend
 
 ```bash
@@ -95,14 +101,27 @@ cp .env.example .env
 npm run dev
 ```
 
+In development, when `VITE_API_BASE_URL` is unset, the frontend uses the local backend default (`http://127.0.0.1:8000`). Production builds **must** set `VITE_API_BASE_URL` explicitly; the frontend never silently falls back to localhost in production.
+
+## Deployment connectivity (frontend + separate backend)
+
+This repository now supports a separately hosted frontend and backend without changing Gemini/Policy Gate/session ownership/PayPal authorization logic:
+
+- **Frontend API base URL:** set `VITE_API_BASE_URL` (public, build-time) to the backend origin, e.g. `https://your-backend.example.com` (no trailing slash required). All frontend API requests are centralized through `frontend/src/api/client.js`.
+- **Backend CORS:** set `CORS_ORIGINS` (server-side, comma-separated exact origins) to the deployed frontend origin(s), e.g. `https://your-frontend.example.com`. Whitespace and trailing slashes are normalized; wildcard origins are not used. When unset, local dev defaults (`localhost/127.0.0.1` ports 5173/5174) are preserved.
+- **SQLite persistence:** set `INTENT_CART_DB_PATH` (server-side) to a persistent-volume file path in hosted environments, e.g. `/data/executions.db`. The default remains the repo-local `executions.db`. The configured parent directory is created when necessary; all DB operations use the same configured path. Hosted deployments should mount a persistent volume because container filesystems may be ephemeral.
+- **Backend startup:** `uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}`.
+
 ## Environment variables
 
-Use the placeholder templates and keep real credentials local:
+Use placeholder templates and keep real credentials local/platform-managed:
 
-- Root [`.env.example`](.env.example): `PAYPAL_ENVIRONMENT`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `CHANNEL3_API_KEY`, `CHANNEL3_BASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
-- Frontend [`frontend/.env.example`](frontend/.env.example): `VITE_PAYPAL_CLIENT_ID`.
+- Root [`.env.example`](.env.example): `PAYPAL_ENVIRONMENT`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL`, `CHANNEL3_API_KEY`, `CHANNEL3_BASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, and deployment placeholders/comments for `CORS_ORIGINS`, `INTENT_CART_DB_PATH`.
+- Frontend [`frontend/.env.example`](frontend/.env.example): `VITE_API_BASE_URL` (public/build-time, required for production builds), `VITE_PAYPAL_CLIENT_ID` (public PayPal client identifier used by the JS SDK).
 
-Never commit `.env` files or credentials. The checked-in templates contain placeholders only.
+**Server-side secrets (never commit, never expose to frontend):** `PAYPAL_CLIENT_SECRET`, `CHANNEL3_API_KEY`, `GEMINI_API_KEY`, and any non-public credentials. `PAYPAL_CLIENT_ID`/PayPal base settings are backend configuration; `VITE_PAYPAL_CLIENT_ID` is the public client identifier intentionally used by the browser SDK.
+
+`VITE_*` values are embedded in the frontend build output by Vite; configure them in the frontend hosting build environment, not as runtime server secrets. Never commit `.env` files or credentials. The checked-in templates contain placeholders only.
 
 ## Tests and build
 
