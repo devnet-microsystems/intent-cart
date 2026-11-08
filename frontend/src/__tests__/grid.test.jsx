@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { mapVerdict } from "../StatusPill.jsx";
 
 describe("grid mapping", () => {
   it("maps approved product", () => {
@@ -16,8 +17,11 @@ describe("grid mapping", () => {
   });
 });
 
-describe("grid config", () => {
-  it("has sortable columns", () => {
-    expect(true).toBe(true);
-  });
+describe("status pill mapping", () => {
+  it("maps approved", () => expect(mapVerdict("APPROVED")).toBe("APPROVED"));
+  it("maps rejected", () => expect(mapVerdict("REJECTED")).toBe("BLOCKED"));
+  it("maps blocked", () => expect(mapVerdict("BLOCKED")).toBe("BLOCKED"));
+  it("maps not verified", () => expect(mapVerdict("NOT VERIFIED")).toBe("NOT VERIFIED"));
+  it("maps missing", () => expect(mapVerdict(undefined)).toBe("NOT VERIFIED"));
+  it("maps unknown", () => expect(mapVerdict("foo")).toBe("NOT VERIFIED"));
 });

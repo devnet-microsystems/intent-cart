@@ -196,7 +196,50 @@ async def test_capture_success(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", patched)
     client = PayPalClient()
     result = await client.capture_order("ORDER123")
-    assert result == {"order_id": "ORDER123", "status": "COMPLETED", "capture_id": "CAP123"}
+    assert result == {"order_id": "ORDER123", "status": "COMPLETED", "capture_id": "CAP123", "amount": None, "currency": None}
+
+
+@pytest.mark.asyncio
+async def test_capture_does_not_log_raw_payload(monkeypatch, capsys):
+    monkeypatch.setenv("PAYPAL_CLIENT_ID", "test_id")
+    monkeypatch.setenv("PAYPAL_CLIENT_SECRET", "test_secret")
+
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        url = str(request.url)
+        if "oauth2/token" in url:
+            return httpx.Response(200, json={"access_token": "test_token", "token_type": "Bearer"})
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "id": "ORDER123",
+                "status": "APPROVED",
+                "intent": "CAPTURE",
+                "purchase_units": [{"amount": {"currency_code": "EUR", "value": "1.00"}}],
+            })
+        return httpx.Response(201, json={
+            "id": "ORDER123",
+            "status": "COMPLETED",
+            "purchase_units": [{"payments": {"captures": [{"id": "CAP123", "amount": {"value": "1.00", "currency_code": "EUR"}, "payer": {"email_address": "buyer@example.test"}}]}}],
+        })
+
+    transport = httpx.MockTransport(handler)
+    original = httpx.AsyncClient
+
+    def patched(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched)
+    client = PayPalClient()
+    result = await client.capture_order("ORDER123")
+    out = capsys.readouterr()
+    combined = (out.out or "") + (out.err or "")
+    assert "CAP_PAYLOAD" not in combined
+    assert "buyer@example.test" not in combined
+    assert result["capture_id"] == "CAP123"
 
 
 @pytest.mark.asyncio

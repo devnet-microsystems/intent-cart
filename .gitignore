@@ -1,15 +1,26 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+
+# Environments and secrets
+.venv/
 .env
 .env.local
-.venv/
+.env.*.local
+
+# Node / frontend build
 node_modules/
 dist/
-.DS_Store
-executions.db
 
+# Local data / artifacts
 executions.db
 *.db
 *.db-wal
 *.db-shm
-.pytest_cache/
+*.bak
+*.log
+
+# Local tooling / OS
+.kilo/
+.DS_Store

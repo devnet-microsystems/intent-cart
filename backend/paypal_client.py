@@ -112,8 +112,8 @@ class PayPalClient:
             if link.get("rel") in ("payer-action", "approve"):
                 approve_url = link.get("href")
                 break
-        if not order_id or not approve_url:
-            logger.error("PayPal order response missing id or approval link")
+        if not order_id:
+            logger.error("PayPal order response missing id")
             raise PayPalAuthError("Invalid response from PayPal")
         return {"order_id": order_id, "approve_url": approve_url}
 
@@ -181,10 +181,15 @@ class PayPalClient:
             cap_payload = response.json()
         except ValueError as exc:
             raise PayPalAuthError("Invalid response from PayPal") from exc
+        capture_amount = None
+        capture_currency = None
         capture_id = None
         for pu in cap_payload.get("purchase_units", []):
             for cap in pu.get("payments", {}).get("captures", []):
                 capture_id = cap.get("id")
+                amt = cap.get("amount", {})
+                capture_amount = amt.get("value")
+                capture_currency = amt.get("currency_code")
         if not capture_id:
             raise PayPalAuthError("Invalid response from PayPal")
-        return {"order_id": order_id, "status": cap_payload.get("status"), "capture_id": capture_id}
+        return {"order_id": order_id, "status": cap_payload.get("status"), "capture_id": capture_id, "amount": capture_amount, "currency": capture_currency}
