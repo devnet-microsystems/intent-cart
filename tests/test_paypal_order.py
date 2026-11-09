@@ -111,3 +111,19 @@ def test_paypal_order_missing_approval_link_returns_explicit_error(client, monke
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     assert r.status_code == 502
     assert r.json().get("detail") == "PayPal approval link unavailable"
+
+
+def test_paypal_order_already_captured_rejected(client, monkeypatch):
+    sid, eid = _setup(client, monkeypatch)
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    mock_http(monkeypatch)
+    # First checkout creates a payment
+    r1 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r1.status_code == 200
+    # Mark the existing payment as captured
+    from backend.storage import update_payment_capture
+    update_payment_capture(r1.json()["payment_id"], "CAP1", 10.0, "EUR", "PAYMENT_CAPTURED")
+    # Retry checkout on the same payment → must be rejected
+    r2 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r2.status_code == 400
+    assert r2.json().get("detail") == "Payment already captured"

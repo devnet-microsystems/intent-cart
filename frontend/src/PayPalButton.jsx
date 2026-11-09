@@ -52,9 +52,13 @@ export default function PayPalButton({ sessionId, executionId, offerId, decision
           });
           const data = await res.json();
           if (!res.ok) { onError?.(data.detail || "Checkout failed"); throw new Error(data.detail || "Checkout failed"); }
-          if (!data.approve_url || typeof data.approve_url !== "string") {
-            onError?.(data.detail || "PayPal approval link unavailable");
-            throw new Error("PayPal approval link unavailable");
+          if (!data.order_id || typeof data.order_id !== "string") {
+            onError?.(data.detail || "Checkout order unavailable");
+            throw new Error("Checkout order unavailable");
+          }
+          if (!data.payment_id || typeof data.payment_id !== "string") {
+            onError?.(data.detail || "Checkout payment unavailable");
+            throw new Error("Checkout payment unavailable");
           }
           paymentIdRef.current = data.payment_id;
           return data.order_id;

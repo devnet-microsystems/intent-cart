@@ -256,6 +256,8 @@ async def checkout_from_selection(body: dict):
     key = f"{session_id}:{execution_id}:{offer_id}"
     existing = get_payment_by_key(key)
     if existing:
+        if existing.get("status") == "PAYMENT_CAPTURED":
+            raise HTTPException(status_code=400, detail="Payment already captured")
         return {"order_id": existing["paypal_order_id"], "approve_url": None, "status": "CREATED", "payment_id": existing["id"]}
     client = PayPalClient()
     try:

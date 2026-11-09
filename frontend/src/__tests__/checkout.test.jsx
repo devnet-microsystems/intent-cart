@@ -484,6 +484,80 @@ describe("single PayPal checkout path", () => {
     global.fetch = originalFetch;
   });
 
+  it("existing unpaid order with approve_url null is accepted", async () => {
+    setupFetch(approvedSearchResponse);
+    const sdk = mockPaypalSdk();
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      const o = opts || {};
+      if (u.includes("/api/orders/checkout") && o.method === "POST") {
+        return json(200, {
+          order_id: "O1",
+          approve_url: null,
+          status: "CREATED",
+          payment_id: "p1",
+        });
+      }
+      return originalFetch(url, opts);
+    };
+    const createOrderCfg = sdk.createOrderCalls[0];
+    expect(createOrderCfg).toBeDefined();
+    const orderId = await createOrderCfg.createOrder();
+    expect(orderId).toBe("O1");
+    global.fetch = originalFetch;
+  });
+
+  it("missing order_id is rejected", async () => {
+    setupFetch(approvedSearchResponse);
+    const sdk = mockPaypalSdk();
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      const o = opts || {};
+      if (u.includes("/api/orders/checkout") && o.method === "POST") {
+        return json(200, {
+          approve_url: "https://approve",
+          status: "CREATED",
+          payment_id: "p1",
+        });
+      }
+      return originalFetch(url, opts);
+    };
+    const createOrderCfg = sdk.createOrderCalls[0];
+    expect(createOrderCfg).toBeDefined();
+    await expect(createOrderCfg.createOrder()).rejects.toThrow();
+    global.fetch = originalFetch;
+  });
+
+  it("missing payment_id is rejected", async () => {
+    setupFetch(approvedSearchResponse);
+    const sdk = mockPaypalSdk();
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      const o = opts || {};
+      if (u.includes("/api/orders/checkout") && o.method === "POST") {
+        return json(200, {
+          order_id: "O1",
+          approve_url: "https://approve",
+          status: "CREATED",
+        });
+      }
+      return originalFetch(url, opts);
+    };
+    const createOrderCfg = sdk.createOrderCalls[0];
+    expect(createOrderCfg).toBeDefined();
+    await expect(createOrderCfg.createOrder()).rejects.toThrow();
+    global.fetch = originalFetch;
+  });
+
   // --- AG Grid product results tests ---
 
   it("AG Grid renders Channel3 result data after fresh search", async () => {
