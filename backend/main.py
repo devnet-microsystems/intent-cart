@@ -2,6 +2,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+
+import httpx
 from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, save_session, get_session, list_executions
 
 from fastapi import FastAPI, HTTPException, Query
@@ -146,10 +148,11 @@ async def search(session_id: str):
         raise HTTPException(400, "mandate not locked")
     mandate = s.get("locked_mandate") or s["mandate"]
     client = Channel3Client()
-    search_filters = {}
-    if mandate.get("color"):
-        search_filters["color"] = mandate.get("color")
-    products = await client.search(mandate.get("query", ""), filters=search_filters or None)
+    try:
+        products = await client.search(mandate.get("query", ""))
+    except httpx.HTTPStatusError as exc:
+        logging.warning("Channel3 upstream error: status %s", exc.response.status_code)
+        raise HTTPException(status_code=502, detail="Product discovery temporarily unavailable") from exc
     products = _reorder_products_for_computer_search(products, mandate)
     results = []
     for p in products:

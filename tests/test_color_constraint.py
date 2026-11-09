@@ -1,8 +1,10 @@
 from backend.policy_engine import evaluate, POLICY_VERSION
 from backend.intent_parser import Mandate, _normalize_extracted_mandate, parse_intent
-from backend.main import authorize_purchase, _reorder_products_for_computer_search
+from backend.main import authorize_purchase, _reorder_products_for_computer_search, app
 from backend.storage import save_session, get_session
 import uuid
+from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------
@@ -326,3 +328,115 @@ def test_reorder_no_category_products():
     # No-category items go in "others" (middle), after laptops
     assert ordered[0]["title"] == "Dell XPS 14"
     assert ordered[1]["title"] == "No Category Item"
+
+
+# ---------------------------------------------------------------------------
+# Regression: UI color must map to Mandate.color, never to Mandate.style
+# ---------------------------------------------------------------------------
+
+def test_structured_filters_color_maps_to_mandate_color_not_style():
+    client = TestClient(app)
+    with patch("backend.main.parse_intent", return_value={"query": "men's cctton t shirt"}):
+        payload = {
+            "query": "men's cctton t shirt",
+            "category": "clothing_accessories",
+            "structured_filters": {
+                "product_type": None,
+                "size": None,
+                "material": None,
+                "material_percentage": None,
+                "style": None,
+                "color": "black",
+                "forbidden_designs": [],
+                "max_price": None,
+                "currency": "EUR",
+            },
+        }
+        res = client.post("/api/intent", json=payload)
+        assert res.status_code == 200
+        mandate = res.json()["mandate"]
+        assert mandate["color"] == "black", f"Expected color=black, got {mandate.get('color')}"
+        assert mandate.get("style") != "black", f"Expected style!=black, got style={mandate.get('style')}"
+
+
+def test_color_rule_verifies_black_product_approved():
+    mandate = {"color": "black", "max_price": 25, "size": "L", "material": "cotton"}
+    product = {
+        "price": 20,
+        "condition": "new",
+        "size": "L",
+        "material": "cotton",
+        "color": "black",
+        "_provenance": {"color_source": ["product.color"]},
+    }
+    result = evaluate(mandate, product)
+    assert result["decision"] == "APPROVED"
+
+
+def test_color_rule_rejects_red_product():
+    mandate = {"color": "black", "max_price": 25, "size": "L", "material": "cotton"}
+    product = {
+        "price": 20,
+        "condition": "new",
+        "size": "L",
+        "material": "cotton",
+        "color": "red",
+        "_provenance": {"color_source": ["product.color"]},
+    }
+    result = evaluate(mandate, product)
+    assert result["decision"] == "REJECTED"
+
+
+def test_color_rule_missing_color_needs_confirmation():
+    mandate = {"color": "black", "max_price": 25, "size": "L", "material": "cotton"}
+    product = {
+        "price": 20,
+        "condition": "new",
+        "size": "L",
+        "material": "cotton",
+        "_provenance": {},
+    }
+    result = evaluate(mandate, product)
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Channel3 HTTP 422 must not produce an unhandled 500
+# ---------------------------------------------------------------------------
+
+def test_channel3_422_returns_controlled_502(monkeypatch):
+    import httpx
+    from fastapi.testclient import TestClient
+
+    async def _raise_status_error(*args, **kwargs):
+        request = httpx.Request("POST", "https://api.trychannel3.com/v1/search")
+        response = httpx.Response(422, request=request)
+        raise httpx.HTTPStatusError("Upstream error", request=request, response=response)
+
+    monkeypatch.setattr("backend.main.Channel3Client.search", _raise_status_error)
+
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": text})
+    client = TestClient(app)
+    payload = {
+        "query": "men's cctton t shirt",
+        "category": "clothing_accessories",
+        "structured_filters": {
+            "product_type": None,
+            "size": None,
+            "material": None,
+            "material_percentage": None,
+            "style": None,
+            "color": "black",
+            "forbidden_designs": [],
+            "max_price": None,
+            "currency": "EUR",
+        },
+    }
+    res = client.post("/api/intent", json=payload)
+    assert res.status_code == 200
+    sid = res.json()["session_id"]
+    res2 = client.post(f"/api/mandate/{sid}/lock")
+    assert res2.status_code == 200
+
+    res3 = client.post(f"/api/search/{sid}")
+    assert res3.status_code == 502
