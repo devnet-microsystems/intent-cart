@@ -34,6 +34,49 @@ def _cors_origins() -> list[str]:
     return origins
 
 
+_ACCESSORY_CATEGORY_SLUGS = {
+    "laptop-sleeves",
+    "keyboards",
+    "wall-chargers",
+    "computer-covers-skins",
+    "tablet-computer-accessories",
+    "computer-accessories",
+    "power-adapters-chargers",
+    "handheld-device-accessories",
+    "input-devices",
+}
+
+
+def _category_slug(product) -> str:
+    cat = product.get("category")
+    if isinstance(cat, dict):
+        return str(cat.get("slug", "") or "")
+    return ""
+
+
+def _is_laptop_category(product) -> bool:
+    return _category_slug(product) == "laptops"
+
+
+def _is_accessory_category(product) -> bool:
+    return _category_slug(product) in _ACCESSORY_CATEGORY_SLUGS
+
+
+def _reorder_products_for_computer_search(products: list, mandate: dict) -> list:
+    """Reorder Channel3 results so genuine computers appear before accessories.
+
+    Only applies when the mandate is for a laptop. Accessories are not
+    removed; they are pushed to the end so genuine computers are visible
+    first. Other categories (desktops, monitors) stay in the middle.
+    """
+    if mandate.get("product_type") != "laptop":
+        return products
+    laptops = [p for p in products if _is_laptop_category(p)]
+    accessories = [p for p in products if _is_accessory_category(p)]
+    others = [p for p in products if not _is_laptop_category(p) and not _is_accessory_category(p)]
+    return laptops + others + accessories
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -103,7 +146,11 @@ async def search(session_id: str):
         raise HTTPException(400, "mandate not locked")
     mandate = s.get("locked_mandate") or s["mandate"]
     client = Channel3Client()
-    products = await client.search(mandate.get("query", ""))
+    search_filters = {}
+    if mandate.get("color"):
+        search_filters["color"] = mandate.get("color")
+    products = await client.search(mandate.get("query", ""), filters=search_filters or None)
+    products = _reorder_products_for_computer_search(products, mandate)
     results = []
     for p in products:
         if not p.get("material") and isinstance(p.get("materials"), list) and p["materials"]:
@@ -183,6 +230,10 @@ def authorize_purchase(session_id: str, execution_id: str, offer_id: str):
         "price": price,
         "condition": (offer.get("condition") if isinstance(offer, dict) else None) or (product.get("condition") if isinstance(product, dict) else None),
         "specs": (product.get("specs") if isinstance(product, dict) else {}) or {},
+        "color": product.get("color") or product.get("colour"),
+        "variants": product.get("variants"),
+        "structured_attributes": product.get("structured_attributes"),
+        "_provenance": product.get("_provenance"),
     })
     if ev.get("decision") != "APPROVED":
         raise HTTPException(403, "offer not approved")

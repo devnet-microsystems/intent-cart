@@ -52,7 +52,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
   const [category, setCategory] = useState("other");
-  const [filters, setFilters] = useState({ product_type: "", size: "", material: "", material_percentage: "", style: "", forbidden_designs: "", max_price: "", currency: "EUR" });
+  const [filters, setFilters] = useState({ product_type: "", size: "", material: "", material_percentage: "", style: "", forbidden_designs: "", max_price: "", currency: "EUR", color: "" });
   const [showAll, setShowAll] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -162,6 +162,7 @@ export default function App() {
         material: filters.material || null,
         material_percentage: filters.material_percentage ? Number(filters.material_percentage) : null,
         style: filters.style || null,
+        color: filters.color || null,
         forbidden_designs: filters.forbidden_designs ? filters.forbidden_designs.split(",").map(s=>s.trim()).filter(Boolean) : [],
         max_price: filters.max_price === "" ? null : Number(filters.max_price),
         currency: filters.currency || "EUR",
@@ -428,6 +429,10 @@ export default function App() {
               <div className="filter-field">
                 <label className="filter-label">Style</label>
                 <input className="filter-input" placeholder="e.g. mismatched" value={filters.style} onChange={(e)=>setFilters({...filters,style:e.target.value})} />
+              </div>
+              <div className="filter-field">
+                <label className="filter-label">Color</label>
+                <input className="filter-input" placeholder="e.g. black" value={filters.color} onChange={(e)=>setFilters({...filters,color:e.target.value})} />
               </div>
               <div className="filter-field">
                 <label className="filter-label">Excluded designs</label>

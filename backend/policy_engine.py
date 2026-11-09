@@ -34,7 +34,7 @@ def build_evidence(product):
     # Pass through already-normalized flat fields (backwards compatibility
     # with test fixtures that pass price/condition/size directly).
     for key in ("price", "condition", "size", "material", "material_percentage",
-                "style", "design", "specs", "pd_input_max_w", "host_output_max_w",
+                "style", "design", "specs", "variants", "pd_input_max_w", "host_output_max_w",
                 "pd_pass_through_supported"):
         if key in product:
             ev[key] = product[key]
@@ -101,6 +101,57 @@ def build_evidence(product):
                 if field.get("conflicts"):
                     ev["_provenance"][f"{numeric_key}_conflicts"] = field.get("conflicts")
     ev["specs"] = policy_specs
+
+    # Color evidence extraction (product-level and variant-level).
+    color_value = None
+    color_sources: list[str] = []
+    color_conflicts: list[str] = []
+
+    flat_color = product.get("color")
+    if flat_color is None:
+        flat_color = product.get("colour")
+    if flat_color is not None:
+        color_value = flat_color
+        color_sources.append("product.color")
+
+    sa = product.get("structured_attributes")
+    if isinstance(sa, dict):
+        sa_color = sa.get("color") or sa.get("colour")
+        if sa_color is not None:
+            if color_value is None:
+                color_value = sa_color
+                color_sources.append("product.structured_attributes.color")
+            elif str(sa_color).lower() != str(color_value).lower():
+                color_conflicts.append(f"structured_attributes.color: {sa_color}")
+
+    variants = product.get("variants")
+    if isinstance(variants, list) and variants:
+        variant_colors: list[str] = []
+        for idx, v in enumerate(variants):
+            if isinstance(v, dict):
+                vc = v.get("color") or v.get("colour")
+                if vc is not None:
+                    variant_colors.append(str(vc))
+                    if color_value is None:
+                        color_value = vc
+                        color_sources.append(f"product.variants[{idx}].color")
+                    elif str(vc).lower() != str(color_value).lower():
+                        color_conflicts.append(f"variants[{idx}].color: {vc}")
+        unique_vc = set(c.lower() for c in variant_colors)
+        if len(unique_vc) > 1:
+            color_conflicts.append(f"variants.colors: {sorted(set(variant_colors))}")
+
+    ev["color"] = color_value
+    if color_sources:
+        ev["_provenance"]["color_source"] = color_sources
+    if color_conflicts:
+        ev["_provenance"]["color_conflicts"] = color_conflicts
+    # Preserve any pre-existing color conflicts carried on the input product.
+    input_provenance = product.get("_provenance")
+    input_conflicts = input_provenance.get("color_conflicts") if isinstance(input_provenance, dict) else None
+    if input_conflicts:
+        existing = ev["_provenance"].get("color_conflicts", [])
+        ev["_provenance"]["color_conflicts"] = list(dict.fromkeys(existing + list(input_conflicts)))
 
     return ev
 
@@ -463,6 +514,86 @@ def evaluate(mandate: Dict[str, Any], product: Dict[str, Any]) -> Dict[str, Any]
         if design and fd.lower() not in design:
             r["passed"] = True
         else:
+            approved = False
+        rules.append(r)
+
+    # color
+    required_color = mandate.get("color")
+    if required_color is not None:
+        observed_color = product.get("color")
+        color_conflicts = product.get("_provenance", {}).get("color_conflicts")
+        color_source = product.get("_provenance", {}).get("color_source")
+
+        # Variant-aware matching: if both size and color are required,
+        # the same variant must satisfy both.
+        variants = product.get("variants")
+        required_size = mandate.get("size")
+        if isinstance(variants, list) and variants:
+            matching_variant = None
+            for v in variants:
+                if isinstance(v, dict):
+                    v_color = v.get("color") or v.get("colour")
+                    v_size = v.get("size")
+                    color_match = v_color is not None and str(v_color).lower() == str(required_color).lower()
+                    size_match = required_size is None or (
+                        v_size is not None and str(v_size) == str(required_size)
+                    )
+                    if color_match and size_match:
+                        matching_variant = v
+                        break
+            if matching_variant is not None:
+                observed_color = matching_variant.get("color") or matching_variant.get("colour")
+                color_conflicts = None
+            else:
+                # Variants exist but none matches both size and color.
+                observed_color = None
+
+        if color_conflicts:
+            r = {
+                "rule": "color",
+                "expected": required_color,
+                "observed": None,
+                "passed": False,
+                "status": "APPLICABLE",
+                "evidence": "product.color",
+                "evidence_source": color_source,
+                "evidence_excerpt": str(observed_color) if observed_color else None,
+                "conflicts": color_conflicts,
+            }
+            approved = False
+        elif observed_color is None:
+            r = {
+                "rule": "color",
+                "expected": required_color,
+                "observed": None,
+                "passed": False,
+                "status": "APPLICABLE",
+                "evidence": "product.color",
+                "evidence_source": color_source,
+                "evidence_excerpt": None,
+            }
+        elif str(observed_color).lower() == str(required_color).lower():
+            r = {
+                "rule": "color",
+                "expected": required_color,
+                "observed": observed_color,
+                "passed": True,
+                "status": "APPLICABLE",
+                "evidence": "product.color",
+                "evidence_source": color_source,
+                "evidence_excerpt": str(observed_color),
+            }
+        else:
+            r = {
+                "rule": "color",
+                "expected": required_color,
+                "observed": observed_color,
+                "passed": False,
+                "status": "APPLICABLE",
+                "evidence": "product.color",
+                "evidence_source": color_source,
+                "evidence_excerpt": str(observed_color),
+            }
             approved = False
         rules.append(r)
 

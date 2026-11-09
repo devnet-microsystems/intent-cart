@@ -27,6 +27,7 @@ class Mandate(BaseModel):
     size: Optional[str] = None
     material: Optional[str] = None
     material_percentage: Optional[int] = None
+    color: Optional[str] = None
     clarification_required: Optional[Any] = None
     condition: Optional[str] = None
     # Laptop vertical (P1 Step 4A): additive, optional, schema-only. Do NOT map
@@ -245,6 +246,12 @@ def _normalize_extracted_mandate(data: Dict[str, Any], user_text: str = "") -> D
     out["required_storage_interface"] = _normalize_storage_interface_requirement(
         out.get("required_storage_interface"), user_text
     )
+    # Normalize British spelling to canonical `color`.
+    if out.get("colour") is not None and out.get("color") is None:
+        out["color"] = out.pop("colour")
+    elif out.get("colour") is not None and out.get("color") is not None:
+        # Both present: keep canonical `color`, drop `colour` to avoid ambiguity.
+        out.pop("colour")
     out = _canonicalize_cpu_requirements(out)
     return out
 
@@ -263,7 +270,7 @@ def parse_intent(text: str) -> dict:
         "Extract a purchasing mandate as JSON matching the provided schema. "
         "query must be a non-empty search string. max_price must be a number without currency symbols, or null if the user did not specify a budget. "
         "currency must be an ISO code such as EUR. "
-        "Extract every explicit constraint: size, material, material_percentage, style, forbidden designs, condition, and technical specs. "
+        "Extract every explicit constraint: size, material, material_percentage, style, color, forbidden designs, condition, and technical specs. "
         "Laptop/tech constraints (set only when explicitly stated): set product_type=\"laptop\" only when the user explicitly requests a laptop, notebook, or ThinkPad; "
         "set min_ram_gb/min_storage_gb as positive integers only for explicit minimum capacities (parse units like GB/TB into integer GB values where unambiguous); "
         "set required_storage_interface only when an explicit interface is stated (NVMe, PCIe NVMe, SATA); SSD/HDD describe storage media, not interfaces — never set required_storage_interface to SSD/HDD and never infer NVMe from SSD; "
