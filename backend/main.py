@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -14,6 +15,7 @@ from .paypal_client import PayPalClient, PayPalAuthError
 from .intent_parser import parse_intent
 from .channel3_client import Channel3Client
 from .policy_engine import evaluate
+from .agent_council import AgentCouncil, ALL_AGENTS, AGENT_NAMES, sanitize_findings
 
 logging.basicConfig(level=logging.INFO)
 
@@ -370,3 +372,114 @@ async def get_saved_execution(execution_id: str):
     if not data:
         raise HTTPException(status_code=404, detail="execution not found")
     return data
+
+
+@app.post("/api/executions/{execution_id}/agent-council")
+async def agent_council_review(execution_id: str, body: dict):
+    if not isinstance(body, dict):
+        body = {}
+    offer_id = body.get("offer_id")
+    if not offer_id:
+        raise HTTPException(status_code=400, detail="offer_id required")
+
+    # 1. Esecuzione esiste.
+    ex = get_execution(execution_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail="execution not found")
+
+    claimed_session_id = body.get("session_id") or ex.get("session_id")
+
+    # 2. Sessione associata esiste ed è locked.
+    s = sessions.get(claimed_session_id)
+    if s is None:
+        ps = get_session(claimed_session_id)
+        if ps:
+            s = {
+                "mandate": ps["mandate"],
+                "locked": ps["locked"],
+                "locked_mandate": ps["locked_mandate"],
+                "category": ps.get("category"),
+                "structured_filters": ps.get("structured_filters", {}),
+            }
+            sessions[claimed_session_id] = s
+    if not s or not s.get("locked"):
+        raise HTTPException(status_code=403, detail="session not found or not locked")
+
+    # 3. Esecuzione appartiene a quella sessione.
+    if ex.get("session_id") != claimed_session_id:
+        raise HTTPException(status_code=403, detail="execution does not belong to session")
+
+    # 4. Offerta selezionata appartiene a quell'esecuzione (dati persistiti).
+    offer = None
+    product = None
+    gate_decision = None
+    for r in ex.get("results", []):
+        o = r.get("offer")
+        if isinstance(o, dict) and o.get("offer_id") == offer_id:
+            offer = o
+            product = r.get("product")
+            g = r.get("gate")
+            if isinstance(g, dict):
+                gate_decision = g.get("decision")
+            break
+    if offer is None:
+        for r in ex.get("results", []):
+            for idx, o in enumerate(r.get("product", {}).get("offers", []) or []):
+                candidate_id = o.get("offer_id") or f"{r.get('product', {}).get('id', 'offer')}-{idx}"
+                if candidate_id == offer_id:
+                    offer = o
+                    product = r.get("product")
+                    g = r.get("gate")
+                    if isinstance(g, dict):
+                        gate_decision = g.get("decision")
+                    break
+            if offer is not None:
+                break
+    if not isinstance(offer, dict) or not offer.get("offer_id"):
+        raise HTTPException(status_code=404, detail="offer not found")
+
+    # 5. La review usa i dati prodotto persistiti, mai dati inviati dal client.
+    start = time.time()
+    council = AgentCouncil()
+    raw = await council.run(
+        mandate=ex.get("mandate") or {},
+        product=product if isinstance(product, dict) else {},
+        offer=offer if isinstance(offer, dict) else {},
+    )
+    duration_ms = int((time.time() - start) * 1000)
+
+    agent_list = []
+    for aid in ALL_AGENTS:
+        blob = raw.get("agents", {}).get(aid, {"status": "UNAVAILABLE", "findings": []})
+        if not isinstance(blob, dict):
+            blob = {"status": "UNAVAILABLE", "findings": []}
+        agent_list.append(
+            {
+                "id": aid,
+                "name": AGENT_NAMES[aid],
+                "status": blob.get("status", "UNAVAILABLE"),
+                "summary": _agent_summary(blob),
+                "findings": sanitize_findings(blob.get("findings", [])),
+            }
+        )
+
+    return {
+        "execution_id": execution_id,
+        "offer_id": offer_id,
+        "advisory_only": True,
+        "policy_gate_decision": gate_decision,
+        "agents": agent_list,
+        "duration_ms": duration_ms,
+    }
+
+
+def _agent_summary(blob: dict) -> str:
+    status = blob.get("status", "UNAVAILABLE")
+    n = len(blob.get("findings", []) or [])
+    if status == "UNAVAILABLE":
+        return "agent non disponibile"
+    if status == "NO_CONCERN_FOUND":
+        return f"nessuna criticità rilevata ({n} finding)"
+    if status == "INSUFFICIENT_DATA":
+        return f"dati insufficienti ({n} finding)"
+    return f"{n} finding segnalati"

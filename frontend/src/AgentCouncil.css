@@ -1,0 +1,357 @@
+/* ==========================================================================
+   INTENT CART — Agent Council (dark fintech interface)
+   ========================================================================== */
+
+.agent-council {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agent-council__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agent-council__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-council__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text-heading);
+  letter-spacing: -0.01em;
+}
+
+.agent-council__subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.agent-council__context {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-context__chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-body);
+}
+
+.agent-council__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.10);
+  color: var(--text-heading);
+}
+
+.agent-council__warning strong {
+  color: #fbbf24;
+}
+
+.agent-council__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agent-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-body);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.agent-button:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  color: var(--text-heading);
+}
+
+.agent-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-council__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+
+.agent-council__gate-kind {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.agent-council__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.agent-card--running {
+  border-color: #2d3a50;
+}
+
+.agent-card--ok {
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.agent-card--concern {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.agent-card--insufficient {
+  border-color: rgba(143, 156, 175, 0.35);
+}
+
+.agent-card--unavailable {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.agent-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-card__name {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-heading);
+}
+
+.agent-card__summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-body);
+  line-height: 1.5;
+}
+
+.agent-card__findings {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.agent-card__empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.agent-finding {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-body);
+}
+
+.agent-severity {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.agent-severity--high {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--state-rejected);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.agent-severity--medium {
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--state-confirm);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.agent-severity--low {
+  background: rgba(59, 130, 246, 0.16);
+  color: var(--accent-blue);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.agent-severity--info {
+  background: rgba(34, 211, 238, 0.16);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+}
+
+.agent-finding__message {
+  line-height: 1.45;
+}
+
+.agent-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--text-heading);
+  border-radius: 50%;
+  animation: agent-spin 0.8s linear infinite;
+}
+
+@keyframes agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.agent-badge--ok {
+  background: rgba(16, 185, 129, 0.16);
+  color: var(--state-approved);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.agent-badge--concern {
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--state-confirm);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.agent-badge--insufficient {
+  background: rgba(143, 156, 175, 0.16);
+  color: var(--text-muted);
+  border: 1px solid rgba(143, 156, 175, 0.35);
+}
+
+.agent-badge--unavailable {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--state-rejected);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.agent-badge--running {
+  background: rgba(143, 156, 175, 0.16);
+  color: var(--text-muted);
+  border: 1px solid rgba(143, 156, 175, 0.35);
+}
+
+.agent-council__gate {
+  margin-top: 6px;
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.agent-council__gate-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-heading);
+}
+
+.agent-council__gate-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.agent-council__decision {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-decision-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 14px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.agent-decision-badge.agent-gate--approved {
+  background: var(--state-approved-light);
+  color: var(--state-approved);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.agent-decision-badge.agent-gate--rejected {
+  background: var(--state-rejected-light);
+  color: var(--state-rejected);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.agent-decision-badge.agent-gate--confirm {
+  background: var(--state-confirm-light);
+  color: var(--state-confirm);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.agent-decision-badge.agent-gate--undetermined {
+  background: rgba(143, 156, 175, 0.16);
+  color: var(--text-muted);
+  border: 1px solid rgba(143, 156, 175, 0.35);
+}
+
+@media (max-width: 640px) {
+  .agent-council__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .agent-council__toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .agent-council__divider {
+    display: none;
+  }
+}

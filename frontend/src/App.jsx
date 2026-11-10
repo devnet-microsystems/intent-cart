@@ -3,6 +3,7 @@ import { AgGridReact } from "ag-grid-react";
 import { themeQuartz, colorSchemeDarkBlue, ModuleRegistry, AllCommunityModule } from "ag-grid-community";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+import AgentCouncil from "./AgentCouncil.jsx";
 import StatusPill from "./StatusPill.jsx";
 import PayPalButton from "./PayPalButton.jsx";
 import { apiFetch } from "./api/client.js";
@@ -50,6 +51,8 @@ export default function App() {
   const mandateView = mandate || lockedMandate || current?.mandate;
   const mandateViewSource = mandate ? "mandate" : lockedMandate ? "lockedMandate" : current?.mandate ? "current" : "none";
   const [busy, setBusy] = useState(false);
+  const [councilReport, setCouncilReport] = useState(null);
+  const [councilLoading, setCouncilLoading] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
   const [category, setCategory] = useState("other");
   const [filters, setFilters] = useState({ product_type: "", size: "", material: "", material_percentage: "", style: "", forbidden_designs: "", max_price: "", currency: "EUR", color: "" });
@@ -152,6 +155,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  useEffect(() => {
+    setCouncilReport(null);
+    setCouncilLoading(false);
+  }, [selected?.offer?.offer_id]);
+
   const runIntent = async () => {
     if (!searchText.trim()) return;
     setBusy(true); setError(null);
@@ -198,6 +206,25 @@ export default function App() {
       setLocked(Boolean(data.locked));
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
+  };
+
+  const handleRunCouncil = async () => {
+    if (!selected || !selected.execution_id || !selected.offer?.offer_id || councilLoading) return;
+    setCouncilLoading(true);
+    try {
+      const res = await apiFetch(`/api/executions/${selected.execution_id}/agent-council`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offer_id: selected.offer.offer_id }),
+      });
+      if (!res.ok) throw new Error("Agent council request failed");
+      const data = await res.json();
+      setCouncilReport(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCouncilLoading(false);
+    }
   };
 
   const runSearch = async () => {
@@ -726,6 +753,16 @@ export default function App() {
             <span style={{ fontWeight: 700 }}>Final decision:</span>
             {selected.gate?.decision === "APPROVED" ? "APPROVED" : selected.gate?.decision === "NEEDS_CONFIRMATION" ? "NEEDS_CONFIRMATION" : "REJECTED"}
           </div>
+          {selected.gate?.decision != null && (
+            <AgentCouncil
+              executionId={selected.execution_id}
+              offerId={selected.offer?.offer_id}
+              policyGateDecision={selected.gate.decision}
+              agents={councilReport?.agents}
+              isLoading={councilLoading}
+              onRun={handleRunCouncil}
+            />
+          )}
           <button className="technical-toggle" onClick={() => setShowTechnical(!showTechnical)}>
             {showTechnical ? "Hide technical" : "Technical evidence"}
           </button>
