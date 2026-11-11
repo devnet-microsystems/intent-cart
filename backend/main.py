@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, save_session, get_session, list_executions
+from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, mark_payment_stale, save_session, get_session, list_executions, _connect, reserve_payment_atomic
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +14,7 @@ from .config import settings
 from .paypal_client import PayPalClient, PayPalAuthError
 from .intent_parser import parse_intent
 from .channel3_client import Channel3Client
-from .policy_engine import evaluate
+from .policy_engine import evaluate, build_product_evidence_payload
 from .agent_council import AgentCouncil, ALL_AGENTS, AGENT_NAMES, sanitize_findings
 
 logging.basicConfig(level=logging.INFO)
@@ -173,19 +173,7 @@ async def search(session_id: str):
             currency = (price_obj.get("currency") if isinstance(price_obj, dict) else None) or offer.get("currency") or mandate.get("currency", "EUR")
             if isinstance(offer, dict):
                 offer["price"] = {"price": price, "currency": currency} if isinstance(price_obj, dict) else offer.get("price")
-            ev = evaluate(mandate, {
-                "price": price,
-                "condition": (offer.get("condition") if isinstance(offer, dict) else None) or p.get("condition"),
-                "specs": p.get("specs", {}),
-                "title": p.get("title"),
-                "description": p.get("description"),
-                "brands": p.get("brands"),
-                "structured_attributes": p.get("structured_attributes"),
-                "key_features": p.get("key_features"),
-                "materials": p.get("materials"),
-                "variants": p.get("variants"),
-                "category": p.get("category"),
-            })
+            ev = evaluate(mandate, build_product_evidence_payload(p, offer))
             item = {"product": p, "gate": ev, "offer": offer}
             results.append(item)
     execution_id = str(uuid.uuid4())
@@ -231,15 +219,7 @@ def authorize_purchase(session_id: str, execution_id: str, offer_id: str):
         raise HTTPException(404, "offer not found")
     price_obj = offer.get("price") if isinstance(offer, dict) else None
     price = price_obj.get("price") if isinstance(price_obj, dict) else (offer.get("price") if isinstance(offer, dict) else None)
-    ev = evaluate(mandate, {
-        "price": price,
-        "condition": (offer.get("condition") if isinstance(offer, dict) else None) or (product.get("condition") if isinstance(product, dict) else None),
-        "specs": (product.get("specs") if isinstance(product, dict) else {}) or {},
-        "color": product.get("color") or product.get("colour"),
-        "variants": product.get("variants"),
-        "structured_attributes": product.get("structured_attributes"),
-        "_provenance": product.get("_provenance"),
-    })
+    ev = evaluate(mandate, build_product_evidence_payload(product if isinstance(product, dict) else {}, offer if isinstance(offer, dict) else None))
     if ev.get("decision") != "APPROVED":
         raise HTTPException(403, "offer not approved")
     if price is None:
@@ -257,15 +237,136 @@ async def checkout_from_selection(body: dict):
     auth = authorize_purchase(session_id, execution_id, offer_id)
     key = f"{session_id}:{execution_id}:{offer_id}"
     existing = get_payment_by_key(key)
+
     if existing:
         if existing.get("status") == "PAYMENT_CAPTURED":
             raise HTTPException(status_code=400, detail="Payment already captured")
-        return {"order_id": existing["paypal_order_id"], "approve_url": None, "status": "CREATED", "payment_id": existing["id"]}
+
+        existing_status = existing.get("status")
+        existing_paypal_order_id = existing.get("paypal_order_id")
+        existing_paypal_request_id = existing.get("paypal_request_id")
+
+        # Retry: existing reservation has no paypal_order_id (creation timed out
+        # or returned ambiguous error). Retry with the SAME request ID so PayPal
+        # idempotency returns the original order instead of creating a new one.
+        if existing_status == "CREATED" and not existing_paypal_order_id and existing_paypal_request_id:
+            client = PayPalClient()
+            try:
+                result = await client.create_order(
+                    amount=str(auth["price"]),
+                    currency=auth["currency"],
+                    paypal_request_id=existing_paypal_request_id,
+                )
+            except PayPalAuthError as exc:
+                # Creation failed again — mark ambiguous, keep idempotency key.
+                mark_payment_stale(existing["id"], "paypal_creation_retry_failed:" + str(exc), free_key=False)
+                raise HTTPException(status_code=502, detail=str(exc))
+            order_id = result.get("order_id") or result.get("id")
+            approve_url = None
+            for link in result.get("links", []):
+                if link.get("rel") in ("approve", "payer-action"):
+                    approve_url = link.get("href")
+            if not approve_url:
+                approve_url = result.get("approve_url")
+            if not approve_url or not isinstance(approve_url, str) or not approve_url.startswith("https://"):
+                # Order created but approval link missing — preserve order ID, fail closed.
+                conn = _connect()
+                conn.execute("UPDATE payments SET paypal_order_id=? WHERE id=?", (order_id, existing["id"]))
+                conn.commit()
+                conn.close()
+                mark_payment_stale(existing["id"], "paypal_approval_link_unavailable", free_key=False)
+                raise HTTPException(status_code=502, detail="PayPal approval link unavailable")
+            # Persist order ID immediately.
+            conn = _connect()
+            conn.execute("UPDATE payments SET paypal_order_id=? WHERE id=?", (order_id, existing["id"]))
+            conn.commit()
+            conn.close()
+            return {"order_id": order_id, "approve_url": approve_url, "status": "CREATED", "payment_id": existing["id"]}
+
+        if existing_paypal_order_id:
+            client = PayPalClient()
+            try:
+                order_status = await client.get_order(existing_paypal_order_id)
+            except PayPalAuthError as exc:
+                if exc.status_code == 404:
+                    # PayPal RESOURCE_NOT_FOUND → stale order, recover below
+                    mark_payment_stale(existing["id"], "paypal_resource_not_found")
+                elif exc.status_code in (401, 403):
+                    # Authentication failure → fail closed, never replace
+                    raise HTTPException(status_code=502, detail=str(exc))
+                else:
+                    # Network failure or PayPal 5xx → fail closed, never replace
+                    raise HTTPException(status_code=502, detail=str(exc))
+            else:
+                paypal_status = order_status.get("status")
+                if paypal_status == "CREATED":
+                    # Order still valid on PayPal; reuse it.
+                    return {"order_id": existing_paypal_order_id, "approve_url": None, "status": "CREATED", "payment_id": existing["id"]}
+                if paypal_status == "APPROVED":
+                    # Buyer already approved; preserve state, do not duplicate.
+                    return {"order_id": existing_paypal_order_id, "approve_url": None, "status": "APPROVED", "payment_id": existing["id"]}
+                if paypal_status == "COMPLETED":
+                    # Already captured; reject duplicate checkout.
+                    raise HTTPException(status_code=400, detail="Payment already captured")
+                if paypal_status == "VOIDED":
+                    # Terminal state — controlled stale recovery.
+                    mark_payment_stale(existing["id"], "paypal_order_voided")
+                elif paypal_status in ("SAVED", "PAYER_ACTION_REQUIRED"):
+                    # Never silently convert to CREATED — fail closed.
+                    raise HTTPException(status_code=502, detail=f"PayPal order in non-recoverable state: {paypal_status}")
+                else:
+                    # Unknown or missing status — fail closed explicitly.
+                    raise HTTPException(status_code=502, detail=f"Unknown PayPal order status: {paypal_status}")
+        else:
+            # CREATED local payment without paypal_order_id and without request ID → not retryable.
+            if existing_status == "CREATED":
+                raise HTTPException(status_code=502, detail="Existing payment has no PayPal order reference or request ID")
+
+    # Atomic checkout reservation — reserve BEFORE calling PayPal.
+    payment_id = str(uuid.uuid4())
+    # UUID-based identifier: 36 chars, well under PayPal's 108-char limit.
+    paypal_request_id = f"intent-cart-{payment_id}"
+    if len(paypal_request_id) > 108:
+        paypal_request_id = paypal_request_id[:108]
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    reserved = reserve_payment_atomic(
+        payment_id=payment_id,
+        session_id=session_id,
+        execution_id=execution_id,
+        offer_id=offer_id,
+        paypal_request_id=paypal_request_id,
+        amount=float(auth["price"]),
+        currency=auth["currency"],
+        mandate_ref=str(auth["mandate_reference"]),
+        idempotency_key=key,
+        created_at=created_at,
+    )
+
+    if not reserved:
+        # Another request already reserved this key — check existing payment.
+        existing2 = get_payment_by_key(key)
+        if existing2:
+            if existing2.get("status") == "PAYMENT_CAPTURED":
+                raise HTTPException(status_code=400, detail="Payment already captured")
+            if existing2.get("paypal_order_id"):
+                return {"order_id": existing2["paypal_order_id"], "approve_url": None, "status": existing2.get("status", "CREATED"), "payment_id": existing2["id"]}
+            if existing2.get("paypal_request_id"):
+                # Retry path: reservation exists but order creation hasn't completed.
+                raise HTTPException(status_code=502, detail="Checkout creation in progress, retry")
+            raise HTTPException(status_code=502, detail="Existing payment has no PayPal order reference")
+        raise HTTPException(status_code=502, detail="Checkout reservation conflict")
+
+    # Call PayPal to create order with idempotency header.
     client = PayPalClient()
     try:
-        result = await client.create_order(amount=str(auth["price"]), currency=auth["currency"])
+        result = await client.create_order(amount=str(auth["price"]), currency=auth["currency"], paypal_request_id=paypal_request_id)
     except PayPalAuthError as exc:
+        # PayPal creation failed — mark reservation ambiguous for audit.
+        # Do not free the idempotency_key so retries can find this payment.
+        mark_payment_stale(payment_id, "paypal_creation_failed:" + str(exc), free_key=False)
         raise HTTPException(status_code=502, detail=str(exc))
+
     order_id = result.get("order_id") or result.get("id")
     approve_url = None
     for link in result.get("links", []):
@@ -274,21 +375,20 @@ async def checkout_from_selection(body: dict):
     if not approve_url:
         approve_url = result.get("approve_url")
     if not approve_url or not isinstance(approve_url, str) or not approve_url.startswith("https://"):
+        # Order created but approval link missing — persist order ID, fail closed.
+        conn = _connect()
+        conn.execute("UPDATE payments SET paypal_order_id=? WHERE id=?", (order_id, payment_id))
+        conn.commit()
+        conn.close()
+        mark_payment_stale(payment_id, "paypal_approval_link_unavailable", free_key=False)
         raise HTTPException(status_code=502, detail="PayPal approval link unavailable")
-    payment_id = str(uuid.uuid4())
-    save_payment({
-        "id": payment_id,
-        "session_id": session_id,
-        "execution_id": execution_id,
-        "offer_id": offer_id,
-        "paypal_order_id": order_id,
-        "status": "CREATED",
-        "amount": float(auth["price"]),
-        "currency": auth["currency"],
-        "mandate_ref": str(auth["mandate_reference"]),
-        "idempotency_key": key,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+
+    # Persist the PayPal order ID atomically.
+    conn = _connect()
+    conn.execute("UPDATE payments SET paypal_order_id=? WHERE id=?", (order_id, payment_id))
+    conn.commit()
+    conn.close()
+
     return {"order_id": order_id, "approve_url": approve_url, "status": "CREATED", "payment_id": payment_id}
 
 @app.post("/api/orders/test")
@@ -371,6 +471,25 @@ async def get_saved_execution(execution_id: str):
     data = get_execution(execution_id)
     if not data:
         raise HTTPException(status_code=404, detail="execution not found")
+
+    # Enrich with session lock state
+    session_id = data.get("session_id")
+    if session_id:
+        session = get_session(session_id)
+        if session:
+            data["session_id"] = session.get("session_id")
+            data["locked"] = session.get("locked", False)
+            data["locked_mandate"] = session.get("locked_mandate")
+            data["session_query"] = session.get("query")
+        else:
+            data["locked"] = False
+            data["locked_mandate"] = None
+            data["session_query"] = None
+    else:
+        data["locked"] = False
+        data["locked_mandate"] = None
+        data["session_query"] = None
+
     return data
 
 

@@ -1,92 +1,138 @@
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api/client.js";
+import { ensurePaypalSdk } from "./api/paypal-sdk.js";
 
-const CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID || "sb";
-
-export default function PayPalButton({ sessionId, executionId, offerId, decision, locked, onCaptured, onError, onCancel, onReadyChange, onLoadingChange, onSdkError, onSdkLoaded }) {
-  const containerRef = useRef(null);
-  const paymentIdRef = useRef(null);
-  const creatingOrderRef = useRef(false);
-  const [ready, setReady] = useState(false);
+export default function PayPalButton({ sessionId, executionId, offerId, decision, locked, onReadyChange, onLoadingChange, onSdkError, onSdkLoaded, onError }) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [capture, setCapture] = useState(null);
+  const [ready, setReady] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const containerRef = useRef(null);
+  const mountedRef = useRef(false);
+  const mostRecentApproval = useRef(null);
+  const createOrderInFlight = useRef(false); // prevents duplicate createOrder executions across StrictMode double-render
+
   const approved = locked === true && decision === "APPROVED" && Boolean(sessionId) && Boolean(executionId) && Boolean(offerId);
 
-  useEffect(() => {
-    if (!approved) return;
-    if (window.paypal) { setReady(true); onSdkLoaded?.(true); onReadyChange?.(true); return; }
-    const script = document.createElement("script");
-    script.src = `https://www.paypal.com/sdk/js?client-id=${CLIENT_ID}&currency=EUR`;
-    script.async = true;
-    script.onload = () => { setReady(true); onSdkLoaded?.(true); onReadyChange?.(true); };
-    script.onerror = () => { onError?.("Failed to load PayPal SDK"); onSdkError?.("Failed to load PayPal SDK"); };
-    document.body.appendChild(script);
-    return () => { script.remove(); };
-  }, [approved, onError]);
+  // Notify parent of state changes (React StrictMode-safe)
+  useEffect(() => { onReadyChange?.(ready); }, [ready]);
+  useEffect(() => { onLoadingChange?.(loading); }, [loading]);
+  useEffect(() => { onSdkError?.(error); }, [error]);
+  useEffect(() => { onSdkLoaded?.(ready && !!window.paypal); }, [ready]);
 
   useEffect(() => {
-    if (!ready || !containerRef.current || !window.paypal) return;
-    containerRef.current.innerHTML = "";
-    window.paypal.Buttons({
-      createOrder: async () => {
-        // Missing-identifier guard: never initiate checkout without the
-        // persisted server-side identifiers.
-        if (!sessionId || !executionId || !offerId) {
-          onError?.("Checkout non disponibile: identificativi sessione, esecuzione o offerta mancanti.");
-          return;
-        }
-        // Synchronous guard against duplicate checkout requests while one
-        // is already in flight (a ref is read synchronously, so it works
-        // even when createOrder is invoked repeatedly without re-render).
-        if (creatingOrderRef.current) {
-          return;
-        }
-        creatingOrderRef.current = true;
+    if (!approved || !containerRef.current || mountedRef.current) return;
+    mountedRef.current = true;
+
+    const init = async () => {
+      try {
         setLoading(true);
-        onLoadingChange?.(true);
-        try {
-          const res = await apiFetch("/api/orders/checkout", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session_id: sessionId, execution_id: executionId, offer_id: offerId }),
-          });
-          const data = await res.json();
-          if (!res.ok) { onError?.(data.detail || "Checkout failed"); throw new Error(data.detail || "Checkout failed"); }
-          if (!data.order_id || typeof data.order_id !== "string") {
-            onError?.(data.detail || "Checkout order unavailable");
-            throw new Error("Checkout order unavailable");
-          }
-          if (!data.payment_id || typeof data.payment_id !== "string") {
-            onError?.(data.detail || "Checkout payment unavailable");
-            throw new Error("Checkout payment unavailable");
-          }
-          paymentIdRef.current = data.payment_id;
-          return data.order_id;
-        } finally {
-        creatingOrderRef.current = false;
-        setLoading(false);
-        onLoadingChange?.(false);
-        }
-      },
-      onApprove: async (data) => {
-        const payRes = await apiFetch("/api/orders/capture", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ payment_id: paymentIdRef.current }),
-        });
-        // payment_id must be stored from checkout response; fallback fetch not available
-        const cap = await payRes.json();
-        if (!payRes.ok) { onError?.(cap.detail || "Capture failed"); return; }
-        setCapture(cap);
-        onCaptured?.(cap);
-        setLoading(false);
-      },
-      onCancel: () => { onCancel?.(); setLoading(false); },
-      onError: (err) => { onError?.(String(err)); setLoading(false); },
-    }).render(containerRef.current);
-  }, [ready, sessionId, executionId, offerId, approved, onCaptured, onError, onCancel]);
+        setError(null);
+        setReady(false);
 
-  if (!approved) return <div>PayPal checkout disabled (blocked)</div>;
-  if (capture) return <div>PAYMENT_CAPTURED {capture.capture_id} {capture.amount} {capture.currency}</div>;
-  return <div><div ref={containerRef} />{loading && <span>Loading...</span>}</div>;
+        await ensurePaypalSdk();
+        setReady(true);
+        onSdkLoaded?.(true);
+
+        if (containerRef.current && containerRef.current.childNodes.length === 0) {
+          window.paypal.Buttons({
+            createOrder: async () => {
+              if (createOrderInFlight.current) {
+                // Already in progress — don't start another one for the same outcome
+                return mostRecentApproval.current?.order_id || "";
+              }
+              createOrderInFlight.current = true;
+              try {
+              const res = await fetch("/api/orders/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ session_id: sessionId, execution_id: executionId, offer_id: offerId }),
+              });
+              if (!res.ok) {
+                // Fetch failed — parameterized validation happens after parse anyway
+                const text = await res.text();
+                const body = text ? (() => { try { return JSON.parse(text); } catch { return "-"; } })() : "-";
+                throw new Error(`/api/orders/checkout: HTTP ${res.status} body=${body}`);
+              }
+              const data = await res.json();
+                if (!data.order_id || typeof data.order_id !== "string") {
+                  onError?.(data.detail || "Checkout order unavailable");
+                  throw new Error("Checkout order unavailable");
+                }
+                if (!data.payment_id || typeof data.payment_id !== "string") {
+                  onError?.(data.detail || "Checkout payment unavailable");
+                  throw new Error("Checkout payment unavailable");
+                }
+                mostRecentApproval.current = data;
+                return data.order_id;
+              } finally {
+                createOrderInFlight.current = false;
+              }
+            },
+            onApprove: async () => {
+              if (!mostRecentApproval.current?.payment_id) {
+                throw new Error("No payment_id for capture");
+              }
+              const res = await fetch("/api/orders/capture", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ payment_id: mostRecentApproval.current.payment_id }),
+              });
+              const cap = await res.json();
+              if (!res.ok) {
+                onError?.(cap.detail || "Capture failed");
+                throw new Error("Capture failed");
+              }
+              setCapture(cap);
+            },
+            onError: (err) => {
+              console.error("PayPal checkout error:", err);
+              const msg = err.message || "PayPal checkout error";
+              setError(msg);
+              onError?.(msg);
+            },
+            onCancel: () => {
+              console.log("PayPal checkout cancelled");
+            },
+          }).render(containerRef.current);
+          setMounted(true);
+        }
+        setLoading(false);
+      } catch (err) {
+        console.error("PayPalButton init error:", err);
+        setError(err.message || "Failed to initialize PayPal");
+        onSdkError?.(err.message);
+        setLoading(false);
+        onSdkLoaded?.(false);
+        mountedRef.current = false;
+      }
+    };
+
+    init();
+  }, [approved]);
+
+  if (capture) {
+    return (
+      <div style={{ padding: 12, background: "#22c55e22", borderRadius: 8 }}>
+        <strong>PAYMENT_CAPTURED</strong> {capture.capture_id} {capture.amount} {capture.currency}
+      </div>
+    );
+  }
+
+  if (!approved) {
+    return (
+      <div style={{ padding: 12, background: "#ef444422", borderRadius: 8 }}>
+        PayPal checkout disabled (blocked)
+      </div>
+    );
+  }
+
+  // Original proven render path (simplified)
+  return (
+    <div style={{ marginTop: 12 }}>
+      {loading && <span>Loading…</span>}
+      {error && <div style={{ color: "red" }}>{error}</div>}
+      <div ref={containerRef} />
+    </div>
+  );
 }

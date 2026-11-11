@@ -12,13 +12,16 @@ TOKEN_PATH = "/v1/oauth2/token"
 
 
 class PayPalAuthError(Exception):
-    pass
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class PayPalClient:
     def __init__(self, timeout: float = 10.0):
         self.base_url = config.settings.paypal_base_url.rstrip("/")
         self.timeout = timeout
+        self.frontend_base_url = config.settings.frontend_base_url.rstrip("/")
 
     def _auth_header(self) -> str:
         if config.settings.missing_credentials:
@@ -62,7 +65,7 @@ class PayPalClient:
         return token
 
 
-    async def create_order(self, amount: str = "1.00", currency: str = "EUR") -> dict:
+    async def create_order(self, amount: str = "1.00", currency: str = "EUR", paypal_request_id: str | None = None) -> dict:
         if config.settings.paypal_environment != "sandbox":
             raise PayPalAuthError("Only sandbox mode is allowed")
         token = await self.get_access_token()
@@ -71,6 +74,8 @@ class PayPalClient:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        if paypal_request_id:
+            headers["PayPal-Request-Id"] = paypal_request_id
         body = {
             "intent": "CAPTURE",
             "purchase_units": [
@@ -79,8 +84,8 @@ class PayPalClient:
             "payment_source": {
                 "paypal": {
                     "experience_context": {
-                        "return_url": "http://127.0.0.1:8001/checkout/return",
-                        "cancel_url": "http://127.0.0.1:8001/checkout/cancel",
+                        "return_url": f"{self.frontend_base_url.rstrip('/')}/checkout/return",
+                        "cancel_url": f"{self.frontend_base_url.rstrip('/')}/checkout/cancel",
                         "user_action": "CONTINUE",
                     }
                 }
@@ -133,7 +138,7 @@ class PayPalClient:
             raise PayPalAuthError("PayPal connection error") from exc
         if response.status_code != 200:
             logger.error("PayPal get order failed with status %s", response.status_code)
-            raise PayPalAuthError(f"PayPal get order failed (status {response.status_code})")
+            raise PayPalAuthError(f"PayPal get order failed (status {response.status_code})", status_code=response.status_code)
         try:
             payload = response.json()
         except ValueError as exc:

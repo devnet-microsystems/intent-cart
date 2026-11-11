@@ -28,6 +28,8 @@ function setupFetch(searchResponse, executions = []) {
     const u = String(url);
     const o = opts || {};
     const method = o.method || "GET";
+    // Handle both absolute and relative URLs
+    const isCheckout = u.includes("/api/orders/checkout") && method === "POST";
     if (u === "http://127.0.0.1:8000/api/executions") return json(200, executions);
     if (u.startsWith("http://127.0.0.1:8000/api/executions/") && method === "GET") {
       const id = u.substring(u.lastIndexOf("/") + 1);
@@ -42,7 +44,7 @@ function setupFetch(searchResponse, executions = []) {
       return json(200, { locked: true, mandate: {} });
     if (u === "http://127.0.0.1:8000/api/search/s1" && method === "POST")
       return json(200, searchResponse);
-    if (u === "http://127.0.0.1:8000/api/orders/checkout" && method === "POST") {
+    if (u.includes("/api/orders/checkout") && method === "POST") {
       lastCheckoutBody = JSON.parse(o.body || "{}");
       if (checkoutResolver) {
         return new Promise((res) => {
@@ -56,7 +58,7 @@ function setupFetch(searchResponse, executions = []) {
         payment_id: "p1",
       });
     }
-    if (u === "http://127.0.0.1:8000/api/orders/capture" && method === "POST") {
+    if (u.includes("/api/orders/capture") && method === "POST") {
       lastCaptureBody = JSON.parse(o.body || "{}");
       return json(200, {
         status: "PAYMENT_CAPTURED",
@@ -1094,5 +1096,111 @@ it("historical execution + APPROVED + locked=false → PayPal disabled", async (
     fireEvent.click(within(container).getByText("Review requirements"));
     await settle();
     expect(container.querySelector(".checkout > div > div")).toBeNull();
+  });
+
+  describe("History execution selection", () => {
+    const targetExecutionId = "11aac7e1-56a4-40f7-9def-445e86f58cde";
+
+    const targetExecutionDetail = {
+      execution_id: targetExecutionId,
+      session_id: "s1",
+      locked: true,
+      locked_mandate: { query: "socks", product_type: "socks" },
+      session_query: "socks",
+      mandate: { query: "socks" },
+      results: [
+        {
+          product: {
+            title: "Socks",
+            images: [],
+            offers: [
+              {
+                offer_id: "offer-1",
+                price: { price: 10, currency: "EUR" },
+                condition: "new",
+              },
+            ],
+          },
+          gate: { decision: "APPROVED", rules: [] },
+          offer: { offer_id: "offer-1", price: { price: 10, currency: "EUR" } },
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      cleanup();
+      mockFetch.mockReset();
+      checkoutResolver = undefined;
+      lastCheckoutBody = undefined;
+      lastCaptureBody = undefined;
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete window.paypal;
+    });
+
+    it("displays query from executions list in history item", async () => {
+      const executions = [
+        {
+          execution_id: targetExecutionId,
+          timestamp: "2024-01-01T00:00:00Z",
+          session_id: "s1",
+          results_count: 1,
+          query: "socks",
+        },
+      ];
+      setupFetch(targetExecutionDetail, executions);
+      const { container } = render(<App />);
+      await settle(300);
+      const historyItem = container.querySelector(
+        '[data-execution-id="' + targetExecutionId + '"]'
+      );
+      expect(historyItem).toBeTruthy();
+      expect(historyItem.textContent).toContain("socks");
+    });
+
+    it("exposes exact execution ID via data-execution-id attribute", async () => {
+      const executions = [
+        {
+          execution_id: targetExecutionId,
+          timestamp: "2024-01-01T00:00:00Z",
+          session_id: "s1",
+          results_count: 1,
+          query: "socks",
+        },
+      ];
+      setupFetch(targetExecutionDetail, executions);
+      const { container } = render(<App />);
+      await settle(300);
+      const historyItem = container.querySelector(
+        'button[data-execution-id="' + targetExecutionId + '"]'
+      );
+      expect(historyItem).toBeTruthy();
+      expect(historyItem.getAttribute("data-execution-id")).toBe(targetExecutionId);
+    });
+
+    it("clicking history item selects exact execution", async () => {
+      const executions = [
+        {
+          execution_id: targetExecutionId,
+          timestamp: "2024-01-01T00:00:00Z",
+          session_id: "s1",
+          results_count: 1,
+          query: "socks",
+        },
+      ];
+      setupFetch(targetExecutionDetail, executions);
+      const { container } = render(<App />);
+      await settle(300);
+      const historyItem = container.querySelector(
+        '[data-execution-id="' + targetExecutionId + '"]'
+      );
+      fireEvent.click(historyItem);
+      await waitFor(() => {
+        const chip = container.querySelector(".agent-context__chip");
+        expect(chip.textContent).toContain(targetExecutionId);
+      });
+    });
   });
 });

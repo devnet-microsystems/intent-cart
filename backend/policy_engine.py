@@ -156,6 +156,63 @@ def build_evidence(product):
     return ev
 
 
+def build_product_evidence_payload(product, offer=None):
+    """Build the Policy Gate evidence payload from a product (and optional offer).
+
+    This is the single source of truth for evidence construction, used by both
+    Channel3 search evaluation and authorize_purchase. Handles missing or
+    non-dictionary product data safely by returning an empty dict.
+
+    Preserves: price, condition, specs, title, description, brands,
+    structured_attributes, key_features, materials, variants, category, color
+    and provenance where available.
+    """
+    if not isinstance(product, dict):
+        return {}
+
+    payload = {}
+
+    # Price from offer (preferred) or product-level price field.
+    if isinstance(offer, dict):
+        price_obj = offer.get("price")
+        if isinstance(price_obj, dict):
+            payload["price"] = price_obj.get("price")
+        else:
+            payload["price"] = offer.get("price")
+    else:
+        payload["price"] = product.get("price")
+
+    # Condition from offer (preferred) or product.
+    if isinstance(offer, dict):
+        payload["condition"] = offer.get("condition") or product.get("condition")
+    else:
+        payload["condition"] = product.get("condition")
+
+    # Specs.
+    specs = product.get("specs")
+    payload["specs"] = specs if isinstance(specs, dict) else ({} if specs is None else {})
+
+    # Title / description.
+    payload["title"] = product.get("title")
+    payload["description"] = product.get("description")
+
+    # Brands / structured_attributes / key_features / materials / variants / category.
+    payload["brands"] = product.get("brands")
+    payload["structured_attributes"] = product.get("structured_attributes")
+    payload["key_features"] = product.get("key_features")
+    payload["materials"] = product.get("materials")
+    payload["variants"] = product.get("variants")
+    payload["category"] = product.get("category")
+
+    # Color.
+    payload["color"] = product.get("color") or product.get("colour")
+
+    # Provenance.
+    payload["_provenance"] = product.get("_provenance") if isinstance(product.get("_provenance"), dict) else None
+
+    return payload
+
+
 def _laptop_rule(rule, expected, observed, passed, status, evidence, source, excerpt, conflicts=None, extra=None):
     r = {
         "rule": rule,

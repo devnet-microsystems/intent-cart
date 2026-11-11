@@ -133,15 +133,28 @@ export default function App() {
             }
           }
         }
-      } catch (e) {
+} catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }
+    };
     load();
     return () => { cancelled = true; };
   }, []);
+
+  // Restore lock state from the initially loaded execution
+  useEffect(() => {
+    if (current && current.locked === true) {
+      setLocked(true);
+      if (current.locked_mandate) setLockedMandate(current.locked_mandate);
+      if (current.session_query) setLockedMandateText(current.session_query);
+    } else {
+      setLocked(false);
+      setLockedMandate(null);
+      setLockedMandateText(null);
+    }
+  }, [current]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -257,7 +270,7 @@ export default function App() {
     finally { setBusy(false); setIsSearching(false); }
   };
 
-  const selectExecution = async (id) => {
+const selectExecution = async (id) => {
     try {
       setLoading(true);
       const res = await apiFetch(`/api/executions/${id}`);
@@ -266,6 +279,16 @@ export default function App() {
           setCurrent(detail);
           setRows((detail.results || []).map((r, i) => ({ ...normalizeResult(r), execution_id: detail.execution_id })));
           setExecutions((prev) => prev.map((e) => (e.execution_id === detail.execution_id ? enrichExecution(e, detail) : e)));
+          // Restore lock state from enriched execution response
+          if (detail.locked === true) {
+            setLocked(true);
+            if (detail.locked_mandate) setLockedMandate(detail.locked_mandate);
+            if (detail.session_query) setLockedMandateText(detail.session_query);
+          } else {
+            setLocked(false);
+            setLockedMandate(null);
+            setLockedMandateText(null);
+          }
           if (detail.session_id) {
             setSessionId(detail.session_id);
           } else {
@@ -276,12 +299,12 @@ export default function App() {
             const normalized = (detail.results || []).map((r, i) => ({ ...normalizeResult(r), execution_id: detail.execution_id }));
             setSelected(normalized[0]);
           }
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
 
   const approved = rows.filter((r) => r.gate?.decision === "APPROVED").length;
   const blocked = rows.filter((r) => r.gate?.decision === "REJECTED").length;
@@ -638,6 +661,7 @@ export default function App() {
                 <button
                   key={e.execution_id}
                   className={`history-item ${isActive ? "is-active" : ""}`}
+                  data-execution-id={e.execution_id}
                   style={{}}
                   onClick={() => selectExecution(e.execution_id)}
                 >

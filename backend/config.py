@@ -16,6 +16,7 @@ class Settings:
         self.channel3_base_url = os.getenv("CHANNEL3_BASE_URL", "https://api.trychannel3.com")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        self.frontend_base_url = os.getenv("FRONTEND_BASE_URL", "https://intent-cart-gamma.vercel.app")
 
     @property
     def missing_credentials(self) -> bool:
