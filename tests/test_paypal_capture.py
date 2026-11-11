@@ -21,7 +21,7 @@ def _setup(client, monkeypatch):
     res = client.post("/api/intent", json=payload)
     sid = res.json()["session_id"]
     client.post("/api/mandate/" + sid + "/lock")
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     from backend.storage import save_execution
     import uuid
     eid = str(uuid.uuid4())
@@ -30,7 +30,7 @@ def _setup(client, monkeypatch):
     save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": {"decision": "APPROVED"}, "offer": offer}], session_id=sid)
     sessions[sid]["execution_id"] = eid
     # create payment via checkout
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     def handler(request):
         url = str(request.url)
         if "oauth2/token" in url:
@@ -166,7 +166,7 @@ def test_capture_rejects_blocked_offer_after_session_state(client, monkeypatch):
     pay = get_payment_by_key(f"{sid}:{eid}:offer-1")
     pid = pay["id"]
     # Offer becomes blocked at capture time: server-side re-evaluation must stop it.
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
     calls = {"n": 0}
     def handler(request):
         calls["n"] += 1

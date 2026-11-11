@@ -1,7 +1,18 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+import hashlib
+import json
 import re
 
 POLICY_VERSION = "2.0"
+
+
+def canonical_fingerprint(obj) -> str:
+    raw = json.dumps(obj, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+# Backward-compatible alias for internal callers.
+_fingerprint = canonical_fingerprint
 
 
 def _priority(mandate, rule_name):
@@ -304,6 +315,102 @@ def _os_compatible(required, observed):
     return req == obs
 
 
+def _norm_number_with_units(value: Any) -> Optional[float]:
+    """Normalize a value with optional units to a float.
+
+    Accepts "17 inches", '17"', "16 GB", "100%", plain "17", etc.
+    Returns None if the value cannot be parsed as a number.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s == "":
+        return None
+    # Strip common unit suffixes and quotes.
+    s = s.replace('"', "").replace("inches", "").replace("inch", "")
+    s = s.replace("GB", "").replace("gb", "").replace("ram", "").replace("RAM", "")
+    s = s.replace("%", "").replace("cm", "").replace("CM", "")
+    s = s.strip()
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attested_value_satisfies(rule: Dict[str, Any], attested_value: Any) -> Optional[bool]:
+    """Deterministically compare a user-attested value against a rule's
+    expected requirement using the same comparator the Policy Gate applies.
+
+    Returns True if the attested value satisfies the requirement, False if it
+    does not, or None if the rule is unsupported for attestation (remains
+    unresolved — fail closed). Never returns True for a non-empty value alone.
+    """
+    if attested_value is None or str(attested_value).strip() == "":
+        return None
+    rule_id = rule.get("rule", "")
+    expected = rule.get("expected")
+    observed = rule.get("observed")
+
+    # --- Numeric >= comparators (min_*, composition) ---
+    if rule_id.startswith("min_") or rule_id == "composition":
+        if expected is None:
+            return None
+        att_num = _norm_number_with_units(attested_value)
+        exp_num = _norm_number_with_units(expected)
+        if att_num is None or exp_num is None:
+            return False
+        return att_num >= exp_num
+
+    # --- max_price: attested value must be <= max_price ---
+    if rule_id == "max_price":
+        if expected is None:
+            return None
+        try:
+            return float(attested_value) <= float(expected)
+        except (TypeError, ValueError):
+            return False
+
+    # --- Exact string match with unit normalization (size, style) ---
+    if rule_id in ("size", "style"):
+        if expected is None:
+            return None
+        # Numeric-with-units equivalence: "17 inches" == '17"' == "17".
+        att_num = _norm_number_with_units(attested_value)
+        exp_num = _norm_number_with_units(expected)
+        if att_num is not None and exp_num is not None:
+            return att_num == exp_num
+        return str(attested_value).strip() == str(expected)
+
+    # --- Case-insensitive exact match (color) ---
+    if rule_id == "color":
+        if expected is None:
+            return None
+        return str(attested_value).strip().lower() == str(expected).lower()
+
+    # --- Material: expected must be contained in attested value (case-insensitive) ---
+    if rule_id == "material":
+        if expected is None:
+            return None
+        return str(expected).lower() in str(attested_value).strip().lower()
+
+    # --- Condition: attested value must be in allowed conditions ---
+    if rule_id == "condition":
+        allowed = expected if isinstance(expected, list) else [expected]
+        allowed_lc = [str(a).lower() for a in allowed if a is not None]
+        if not allowed_lc:
+            return None
+        return str(attested_value).strip().lower() in allowed_lc
+
+    # --- Forbidden design: attested value must NOT contain the forbidden design ---
+    if rule_id.startswith("forbidden_design_"):
+        if expected is None:
+            return None
+        return str(expected).lower() not in str(attested_value).strip().lower()
+
+    # --- Unsupported rule: remain unresolved (fail closed) ---
+    return None
+
+
 def _cpu_field(normalized):
     return (normalized or {}).get("processor_family") or {}
 
@@ -490,14 +597,43 @@ def _evaluate_laptop_rules(mandate, product):
     return rules
 
 
-def evaluate(mandate: Dict[str, Any], product: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate(mandate: Dict[str, Any], product: Dict[str, Any], attestations: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    # Compute fingerprints from inputs BEFORE normalization so they match
+    # exactly what create_attestation() stores (same locked mandate, same
+    # normalized product evidence payload).
+    mandate_fp = canonical_fingerprint(mandate)
+    product_fp = canonical_fingerprint(product)
+
     # Normalize the incoming product through the evidence adapter so that
     # Channel3 fields (structured_attributes, key_features, materials, …)
     # are available to every rule with provenance recorded. Do not mutate
     # the original mandate or persisted objects.
     product = build_evidence(product)
+
     rules: List[Dict[str, Any]] = []
     approved = True
+
+    # Build valid attestation lookup by rule_id, validating fingerprints and
+    # policy version against the current context. Only attestations whose
+    # mandate, offer/evidence and policy fingerprints match are eligible.
+    # list_attestations() returns DESC (newest first); keep the first valid
+    # attestation per rule_id so the latest one wins and never gets
+    # overwritten by an older record. All historical records are preserved
+    # in the audit table.
+    valid_attestations: Dict[str, Dict[str, Any]] = {}
+    for att in (attestations or []):
+        rule_id = att.get("rule_id")
+        if not rule_id:
+            continue
+        if rule_id in valid_attestations:
+            continue
+        if att.get("mandate_fingerprint") != mandate_fp:
+            continue
+        if att.get("offer_evidence_fingerprint") != product_fp:
+            continue
+        if att.get("policy_version") != POLICY_VERSION:
+            continue
+        valid_attestations[rule_id] = att
 
     # price
     price = product.get("price")
@@ -702,6 +838,55 @@ def evaluate(mandate: Dict[str, Any], product: Dict[str, Any]) -> Dict[str, Any]
     for r in rules:
         if "priority" not in r:
             r["priority"] = _priority(mandate, r["rule"].replace("min_", "").replace("forbidden_design_", "forbidden_designs"))
+
+    # Apply valid user attestations to unresolved REQUIRED rules.
+    # A valid attestation may satisfy its specific missing requirement but
+    # must not override failures, conflicts, or other missing requirements.
+    # The attested value must meet the rule's exact requirement via the same
+    # deterministic comparator the Policy Gate applies — a non-empty value
+    # alone is never sufficient.
+    for r in rules:
+        rule_id = r.get("rule")
+        att = valid_attestations.get(rule_id)
+        if not att:
+            continue
+        # Only REQUIRED, unresolved (not passed, no observed value) rules
+        # are eligible for attestation. Failed rules are never overridable.
+        if r.get("priority") != "REQUIRED":
+            continue
+        if r.get("passed") is True:
+            continue
+        if r.get("status") == "FAILED":
+            continue
+        if r.get("observed") not in (None, ""):
+            # Already has an observed seller value — attestation cannot override.
+            continue
+        # Apply the deterministic comparator for this specific rule.
+        satisfied = _attested_value_satisfies(r, att.get("attested_value"))
+        if satisfied is not True:
+            # Unsupported rule or value does not meet the requirement —
+            # remains unresolved (fail closed). Never blindly pass.
+            continue
+        r["passed"] = True
+        r["observed"] = att.get("attested_value")
+        r["status"] = "APPLICABLE"
+        r["verification_source"] = "USER_ATTESTED"
+        r["evidence_source"] = "user_attestation"
+        r["evidence_excerpt"] = f"User-attested value: {att.get('attested_value')} from {att.get('source_url')}"
+        if att.get("explanation"):
+            r["user_attestation_explanation"] = att.get("explanation")
+        r["attestation_id"] = att.get("id")
+        r["attestation_timestamp"] = att.get("timestamp")
+
+    # Tag every rule with its verification source for transparency.
+    for r in rules:
+        if "verification_source" not in r:
+            if r.get("passed") is True and r.get("observed") not in (None, ""):
+                r["verification_source"] = "SELLER_VERIFIED"
+            elif r.get("status") == "FAILED":
+                r["verification_source"] = "FAILED"
+            else:
+                r["verification_source"] = "NOT_VERIFIED"
 
     has_fail = any((not r.get("passed", False)) and r.get("status") != "NOT_APPLICABLE" and r.get("observed") not in (None, "") and r.get("priority") == "REQUIRED" for r in rules)
     has_unverified = any((not r.get("passed", False)) and r.get("status") != "NOT_APPLICABLE" and (r.get("observed") is None or r.get("observed") == "") and r.get("priority") == "REQUIRED" for r in rules)

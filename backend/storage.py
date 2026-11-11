@@ -228,3 +228,104 @@ def get_session(session_id):
     if not row:
         return None
     return {"session_id": row[0], "category": row[1], "query": row[2], "mandate": json.loads(row[3]), "locked_mandate": json.loads(row[4]) if row[4] else None, "locked": bool(row[5]), "structured_filters": json.loads(row[6]) if row[6] else {}}
+
+
+def init_attestations():
+    conn = _connect()
+    conn.execute("""CREATE TABLE IF NOT EXISTS attestations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        execution_id TEXT NOT NULL,
+        offer_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        attested_value TEXT,
+        source_url TEXT,
+        explanation TEXT,
+        timestamp TEXT NOT NULL,
+        mandate_fingerprint TEXT NOT NULL,
+        offer_evidence_fingerprint TEXT NOT NULL,
+        policy_version TEXT NOT NULL
+    )""")
+    conn.commit()
+    conn.close()
+
+
+def save_attestation(record):
+    init_attestations()
+    conn = _connect()
+    conn.execute(
+        "INSERT INTO attestations (id, session_id, execution_id, offer_id, rule_id, attested_value, source_url, explanation, timestamp, mandate_fingerprint, offer_evidence_fingerprint, policy_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (record["id"], record["session_id"], record["execution_id"], record["offer_id"], record["rule_id"], record.get("attested_value"), record.get("source_url"), record.get("explanation"), record["timestamp"], record["mandate_fingerprint"], record["offer_evidence_fingerprint"], record["policy_version"]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_attestation(attestation_id):
+    init_attestations()
+    conn = _connect()
+    row = conn.execute("SELECT id, session_id, execution_id, offer_id, rule_id, attested_value, source_url, explanation, timestamp, mandate_fingerprint, offer_evidence_fingerprint, policy_version FROM attestations WHERE id=?", (attestation_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "execution_id": row[2],
+        "offer_id": row[3],
+        "rule_id": row[4],
+        "attested_value": row[5],
+        "source_url": row[6],
+        "explanation": row[7],
+        "timestamp": row[8],
+        "mandate_fingerprint": row[9],
+        "offer_evidence_fingerprint": row[10],
+        "policy_version": row[11],
+    }
+
+
+def list_attestations(session_id=None, execution_id=None, offer_id=None, rule_id=None):
+    init_attestations()
+    conn = _connect()
+    query = "SELECT id, session_id, execution_id, offer_id, rule_id, attested_value, source_url, explanation, timestamp, mandate_fingerprint, offer_evidence_fingerprint, policy_version FROM attestations"
+    params = []
+    conditions = []
+    if session_id is not None:
+        conditions.append("session_id=?")
+        params.append(session_id)
+    if execution_id is not None:
+        conditions.append("execution_id=?")
+        params.append(execution_id)
+    if offer_id is not None:
+        conditions.append("offer_id=?")
+        params.append(offer_id)
+    if rule_id is not None:
+        conditions.append("rule_id=?")
+        params.append(rule_id)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY timestamp DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        results.append({
+            "id": r[0],
+            "session_id": r[1],
+            "execution_id": r[2],
+            "offer_id": r[3],
+            "rule_id": r[4],
+            "attested_value": r[5],
+            "source_url": r[6],
+            "explanation": r[7],
+            "timestamp": r[8],
+            "mandate_fingerprint": r[9],
+            "offer_evidence_fingerprint": r[10],
+            "policy_version": r[11],
+        })
+    return results
+
+
+def get_attestations_for_rule(session_id, execution_id, offer_id, rule_id):
+    """Return all attestations for a specific rule, ordered by timestamp."""
+    return list_attestations(session_id=session_id, execution_id=execution_id, offer_id=offer_id, rule_id=rule_id)

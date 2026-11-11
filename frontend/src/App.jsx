@@ -63,6 +63,13 @@ export default function App() {
   const [ppLoading, setPpLoading] = useState(false);
   const [ppSdkLoaded, setPpSdkLoaded] = useState(false);
   const [ppSdkError, setPpSdkError] = useState(null);
+  const [attestation, setAttestation] = useState(null);
+  const [attestationLoading, setAttestationLoading] = useState(false);
+  const [attestationError, setAttestationError] = useState(null);
+  const [attDraftValue, setAttDraftValue] = useState({});
+  const [attDraftUrl, setAttDraftUrl] = useState({});
+  const [attDraftConfirmed, setAttDraftConfirmed] = useState({});
+  const [attDraftNotes, setAttDraftNotes] = useState({});
 
   function summarizeStatus(results) {
     if (!results || results.length === 0) return null;
@@ -270,7 +277,65 @@ export default function App() {
     finally { setBusy(false); setIsSearching(false); }
   };
 
-const selectExecution = async (id) => {
+  const fetchAttestations = async (executionId, offerId) => {
+    if (!sessionId || !executionId || !offerId) return;
+    setAttestationLoading(true);
+    try {
+      const res = await apiFetch(`/api/attestations?session_id=${encodeURIComponent(sessionId)}&execution_id=${encodeURIComponent(executionId)}&offer_id=${encodeURIComponent(offerId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAttestation(data || []);
+    } catch (e) {
+      setAttestation([]);
+    } finally {
+      setAttestationLoading(false);
+    }
+  };
+
+  const submitAttestation = async (ruleId, attestedValue, sourceUrl, explanation) => {
+    if (!selected || !selected.execution_id || !selected.offer?.offer_id || !sessionId) return;
+    setAttestationLoading(true);
+    setAttestationError(null);
+    try {
+      const res = await apiFetch("/api/attestations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          execution_id: selected.execution_id,
+          offer_id: selected.offer.offer_id,
+          rule_id: ruleId,
+          attested_value: attestedValue,
+          source_url: sourceUrl,
+          explanation: explanation || "",
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Attestation failed");
+      }
+      const data = await res.json();
+      setAttestationError(null);
+      // Re-fetch the execution to get fresh gate evaluation
+      const detailRes = await apiFetch(`/api/executions/${selected.execution_id}`);
+      if (detailRes.ok) {
+        const detail = await detailRes.json();
+        const normalized = (detail.results || []).map((r, i) => ({ ...normalizeResult(r), execution_id: detail.execution_id }));
+        setRows(normalized);
+        // Re-select the same offer
+        const reselected = normalized.find((r) => r.offer?.offer_id === selected.offer?.offer_id);
+        setSelected(reselected || selected);
+      }
+      return data;
+    } catch (e) {
+      setAttestationError(e.message);
+      throw e;
+    } finally {
+      setAttestationLoading(false);
+    }
+  };
+
+  const selectExecution = async (id) => {
     try {
       setLoading(true);
       const res = await apiFetch(`/api/executions/${id}`);
@@ -317,6 +382,8 @@ const selectExecution = async (id) => {
   else if (!selected?.execution_id) ppReason = "execution_id is empty";
   else if (!selected?.offer?.offer_id) ppReason = "offer_id is empty";
   else if (locked !== true) ppReason = "mandate is not locked — a new locked mandate is required";
+  else if (selected?.gate?.decision === "REJECTED") ppReason = "product is rejected — checkout blocked";
+  else if (selected?.gate?.decision === "NEEDS_CONFIRMATION") ppReason = "checkout blocked — unresolved required requirements require user attestation";
   else if (selected?.gate?.decision !== "APPROVED") ppReason = `gate.decision is "${selected?.gate?.decision}", not APPROVED`;
   else ppReason = "All conditions met — PayPal should render";
 
@@ -397,6 +464,14 @@ const selectExecution = async (id) => {
     const selectedRow = event.api.getSelectedRows()[0];
     setSelected(selectedRow || null);
   };
+
+  useEffect(() => {
+    if (selected?.execution_id && selected?.offer?.offer_id) {
+      fetchAttestations(selected.execution_id, selected.offer.offer_id);
+    } else {
+      setAttestation([]);
+    }
+  }, [selected?.execution_id, selected?.offer?.offer_id]);
 
   const onGridReady = (event) => {
     const rowSel = event.api.isModuleRegistered("RowSelectionModule");
@@ -734,7 +809,6 @@ const selectExecution = async (id) => {
               onGridReady={onGridReady}
               suppressCellFocus={true}
               suppressScrollOnNewData
-              domLayout="autoHeight"
               rowHeight={110}
               headerHeight={40}
               suppressMovableColumns
@@ -759,15 +833,23 @@ const selectExecution = async (id) => {
               const status = r.status === "NOT_APPLICABLE" ? "NOT APPLICABLE" : passed ? "PASS" : verified ? "FAIL" : "NOT VERIFIED";
               const statusClass = passed ? "pass" : verified ? "fail" : r.status === "NOT_APPLICABLE" ? "not-applicable" : "not-verified";
               const label = String(r.rule || "").replace(/_/g, " ").replace(/^min /, "min ").toUpperCase();
+              const vsource = r.verification_source || "SELLER_VERIFIED";
+              const vsClass = vsource === "USER_ATTESTED" ? "attested" : vsource === "FAILED" ? "failed" : vsource === "NOT_VERIFIED" ? "unverified" : "seller";
               return (
                 <div key={i} className="rule-item">
                   <div className="rule-item__header">
                     <strong className="rule-item__name">{label}</strong>
                     <span className={`rule-item__status ${statusClass}`}>{status}</span>
+                    <span className={`rule-item__vsource ${vsClass}`}>{vsource.replace(/_/g, " ")}</span>
                   </div>
                   <p className="rule-item__evidence">
                     Expected: {JSON.stringify(r.expected)} &middot; Observed: {r.observed === null || r.observed === undefined ? "NOT VERIFIED" : JSON.stringify(r.observed)}
                   </p>
+                  {r.verification_source === "USER_ATTESTED" && (
+                    <p style={{ margin: 0, fontSize: 11, color: "var(--state-confirm)" }}>
+                      User-attested: {r.attestation_excerpt || ""} {r.user_attestation_explanation ? `— ${r.user_attestation_explanation}` : ""}
+                    </p>
+                  )}
                   <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)" }}>{r.evidence}</p>
                 </div>
               );
@@ -777,6 +859,91 @@ const selectExecution = async (id) => {
             <span style={{ fontWeight: 700 }}>Final decision:</span>
             {selected.gate?.decision === "APPROVED" ? "APPROVED" : selected.gate?.decision === "NEEDS_CONFIRMATION" ? "NEEDS_CONFIRMATION" : "REJECTED"}
           </div>
+          {needsConfirmation && (
+            <div className="attestation-panel">
+              <span className="attestation-label">User attestation required for unresolved requirements:</span>
+              <p className="attestation-note">
+                Provide the value you personally verified, the seller/source URL, and confirm you checked this information.
+                This is a user attestation, not independently verified seller evidence.
+              </p>
+              {(selected.gate?.rules || []).filter((r) => r.priority === "REQUIRED" && !r.passed && (r.observed === null || r.observed === undefined || r.observed === "")).map((r) => {
+                const existingAtt = (attestation || []).find((a) => a.rule_id === r.rule);
+                return (
+                  <div key={r.rule} className="attestation-item">
+                    <div className="attestation-rule">
+                      <strong>{String(r.rule || "").replace(/_/g, " ").replace(/^min /, "min ").toUpperCase()}</strong>
+                      <span className="attestation-source-user">USER_ATTESTED</span>
+                    </div>
+                    <div className="attestation-fields">
+                      <div className="attestation-field-row">
+                        <label>Requirement:</label>
+                        <span>{JSON.stringify(r.expected)}</span>
+                      </div>
+                      <div className="attestation-field-row">
+                        <label>Observed:</label>
+                        <span className="attestation-observed">{r.observed === null || r.observed === undefined ? "NOT VERIFIED" : JSON.stringify(r.observed)}</span>
+                      </div>
+                      {existingAtt ? (
+                        <div className="attestation-existing">
+                          <span className="attestation-existing-value">Attested value: {existingAtt.attested_value}</span>
+                          <span className="attestation-existing-source">Source: {existingAtt.source_url}</span>
+                          <span className="attestation-existing-time">{existingAtt.timestamp}</span>
+                        </div>
+                      ) : (
+                        <div className="attestation-form">
+                          <input
+                            className="attestation-input"
+                            placeholder="Value you personally verified"
+                            onChange={(e) => setAttDraftValue((prev) => ({ ...prev, [r.rule]: e.target.value }))}
+                            value={attDraftValue?.[r.rule] || ""}
+                          />
+                          <input
+                            className="attestation-input"
+                            placeholder="Seller/source URL"
+                            onChange={(e) => setAttDraftUrl((prev) => ({ ...prev, [r.rule]: e.target.value }))}
+                            value={attDraftUrl?.[r.rule] || ""}
+                          />
+                          <div className="attestation-checkbox">
+                            <input
+                              type="checkbox"
+                              id={`attest-confirm-${r.rule}`}
+                              onChange={(e) => setAttDraftConfirmed((prev) => ({ ...prev, [r.rule]: e.target.checked }))}
+                              checked={attDraftConfirmed?.[r.rule] === true}
+                            />
+                            <label htmlFor={`attest-confirm-${r.rule}`}>I personally checked this information</label>
+                          </div>
+                          <textarea
+                            className="attestation-input att-textarea"
+                            placeholder="Optional notes"
+                            onChange={(e) => setAttDraftNotes((prev) => ({ ...prev, [r.rule]: e.target.value }))}
+                            value={attDraftNotes?.[r.rule] || ""}
+                          />
+                          <button
+                            className="attest-submit-btn"
+                            onClick={() => {
+                              const rv = attDraftValue?.[r.rule];
+                              const ru = attDraftUrl?.[r.rule];
+                              if (!rv || !ru || attDraftConfirmed?.[r.rule] !== true) {
+                                setAttestationError("Please provide value, source URL, and confirm you checked.");
+                                return;
+                              }
+                              submitAttestation(r.rule, rv, ru, attDraftNotes?.[r.rule] || "");
+                            }}
+                            disabled={attestationLoading}
+                          >
+                            Submit attestation
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {attestationError && (
+                <div className="attestation-error">{attestationError}</div>
+              )}
+            </div>
+          )}
           {selected.gate?.decision != null && (
             <AgentCouncil
               executionId={selected.execution_id}
@@ -808,7 +975,9 @@ const selectExecution = async (id) => {
               ? locked
                 ? "Approved product eligible for PayPal checkout. PayPal buyer approval still required."
                 : "Checkout unavailable: a new locked mandate is required. Review and confirm requirements again."
-              : "Checkout unavailable: product does not satisfy the locked purchasing mandate."}
+              : selected.gate?.decision === "NEEDS_CONFIRMATION"
+                ? "Checkout blocked — unresolved required requirements require user attestation before PayPal."
+                : "Checkout unavailable: product does not satisfy the locked purchasing mandate."}
       </div>
       <div className="checkout">
         {selected && (

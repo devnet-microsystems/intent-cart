@@ -1109,6 +1109,252 @@ input.filter-input::placeholder {
 
 /* AG Grid cell focus */
 
+/* AG Grid — custom scrollbar for results panel */
+.ag-grid-wrapper::-webkit-scrollbar {
+  width: 10px;
+}
+.ag-grid-wrapper::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+.ag-grid-wrapper::-webkit-scrollbar-thumb {
+  background: #2d3a50;
+  border-radius: 6px;
+  border: 2px solid var(--bg-surface);
+}
+.ag-grid-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}
+
+/* AG Grid horizontal scrollbar */
+.ag-grid-wrapper::-webkit-scrollbar-horizontal {
+  height: 10px;
+}
+.ag-grid-wrapper::-webkit-scrollbar-corner {
+  background: var(--bg-surface);
+}
+
+/* ==========================================================================
+   Attestation workflow
+   ========================================================================== */
+
+.attestation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface-hover);
+  border-radius: var(--radius-sm);
+  padding: 16px 20px;
+}
+
+.attestation-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 4px;
+}
+
+.attestation-note {
+  font-size: 12px;
+  color: var(--state-confirm);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.attestation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  background: var(--bg-surface);
+}
+
+.attestation-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.attestation-rule strong {
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.attestation-source-user {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--state-confirm-light);
+  color: var(--state-confirm);
+}
+
+.attestation-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attestation-field-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.attestation-field-row label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  min-width: 100px;
+}
+
+.attestation-field-row span {
+  color: var(--text-body);
+  font-size: 13px;
+}
+
+.attestation-observed {
+  color: var(--state-rejected);
+  font-weight: 700;
+}
+
+.attestation-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-body);
+}
+
+.attestation-existing-value, .attestation-existing-source, .attestation-existing-time {
+  color: var(--text-muted);
+}
+
+.attestation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attestation-input {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-body);
+  font-size: 13px;
+  outline: none;
+}
+
+.attestation-input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-blue-light);
+}
+
+.attestation-input::placeholder {
+  color: var(--text-light);
+}
+
+.att-textarea {
+  min-height: 60px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.attestation-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+.attestation-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-blue);
+}
+
+.attestation-checkbox label {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.attest-submit-btn {
+  background: linear-gradient(135deg, var(--state-confirm), #d97706);
+  color: #ffffff;
+  border: 0;
+  padding: 12px 20px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  margin-top: 4px;
+}
+
+.attest-submit-btn:hover:not(:disabled) {
+  box-shadow: 0 0 0 3px var(--state-confirm-light);
+}
+
+.attest-submit-btn:disabled {
+  background: #2a3650;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: not-allowed;
+}
+
+.attestation-error {
+  font-size: 12px;
+  color: var(--state-rejected);
+  margin-top: 8px;
+}
+
+.attestation-existing {
+  font-size: 12px;
+  color: var(--text-body);
+}
+
+/* Rule item verification source */
+.rule-item__vsource {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.rule-item__vsource.seller {
+  background: var(--state-approved-light);
+  color: var(--state-approved);
+}
+
+.rule-item__vsource.attested {
+  background: var(--state-confirm-light);
+  color: var(--state-confirm);
+}
+
+.rule-item__vsource.failed {
+  background: var(--state-rejected-light);
+  color: var(--state-rejected);
+}
+
+.rule-item__vsource.unverified {
+  background: var(--bg-muted);
+  color: var(--text-light);
+}
+
 /* ==========================================================================
    Search progress panel
    ========================================================================== */

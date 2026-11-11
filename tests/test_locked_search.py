@@ -98,6 +98,6 @@ def test_free_text_search_still_works(client, monkeypatch):
     mock_client = MagicMock()
     mock_client.search = AsyncMock(return_value=[])
     monkeypatch.setattr("backend.main.Channel3Client", lambda: mock_client)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     r = client.post(f"/api/search/{sid}")
     assert r.status_code == 200

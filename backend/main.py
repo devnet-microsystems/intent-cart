@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import os
 import time
@@ -5,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, mark_payment_stale, save_session, get_session, list_executions, _connect, reserve_payment_atomic
+from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, mark_payment_stale, save_session, get_session, list_executions, _connect, reserve_payment_atomic, init_attestations, save_attestation, get_attestation, list_attestations, get_attestations_for_rule
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +16,7 @@ from .config import settings
 from .paypal_client import PayPalClient, PayPalAuthError
 from .intent_parser import parse_intent
 from .channel3_client import Channel3Client
-from .policy_engine import evaluate, build_product_evidence_payload
+from .policy_engine import evaluate, build_product_evidence_payload, canonical_fingerprint, POLICY_VERSION
 from .agent_council import AgentCouncil, ALL_AGENTS, AGENT_NAMES, sanitize_findings
 
 logging.basicConfig(level=logging.INFO)
@@ -200,11 +202,13 @@ def authorize_purchase(session_id: str, execution_id: str, offer_id: str):
         raise HTTPException(403, "execution does not belong to session")
     offer = None
     product = None
+    gate_entry = None
     for r in ex.get("results", []):
         o = r.get("offer")
         if isinstance(o, dict) and o.get("offer_id") == offer_id:
             offer = o
             product = r.get("product")
+            gate_entry = r
             break
     if offer is None:
         for r in ex.get("results", []):
@@ -212,21 +216,41 @@ def authorize_purchase(session_id: str, execution_id: str, offer_id: str):
                 if (o.get("offer_id") or f"{r['product'].get('id','offer')}-{idx}") == offer_id:
                     offer = o
                     product = r.get("product")
+                    gate_entry = r
                     break
             if offer is not None:
                 break
     if offer is None or not (isinstance(offer, dict) and offer.get("offer_id")):
         raise HTTPException(404, "offer not found")
-    price_obj = offer.get("price") if isinstance(offer, dict) else None
-    price = price_obj.get("price") if isinstance(price_obj, dict) else (offer.get("price") if isinstance(offer, dict) else None)
-    ev = evaluate(mandate, build_product_evidence_payload(product if isinstance(product, dict) else {}, offer if isinstance(offer, dict) else None))
+
+    # Load current attestations for this execution/offer/session.
+    attestations = list_attestations(
+        session_id=session_id,
+        execution_id=execution_id,
+        offer_id=offer_id,
+    )
+
+    # Compute fingerprints for attestation validation.
+    mandate_fp = canonical_fingerprint(mandate)
+    evidence_payload = build_product_evidence_payload(product if isinstance(product, dict) else {}, offer if isinstance(offer, dict) else None)
+    evidence_fp = canonical_fingerprint(evidence_payload)
+
+    # Re-evaluate the Policy Gate with current attestations.
+    ev = evaluate(
+        mandate,
+        evidence_payload,
+        attestations,
+    )
+
     if ev.get("decision") != "APPROVED":
         raise HTTPException(403, "offer not approved")
+    price_obj = offer.get("price") if isinstance(offer, dict) else None
+    price = price_obj.get("price") if isinstance(price_obj, dict) else (offer.get("price") if isinstance(offer, dict) else None)
     if price is None:
         raise HTTPException(400, "invalid price")
     currency = (price_obj.get("currency") if isinstance(price_obj, dict) else None) or mandate.get("currency", "EUR")
     title = (product.get("title") if isinstance(product, dict) else None) or (product.get("name") if isinstance(product, dict) else None) or "product"
-    return {"session_id": session_id, "execution_id": execution_id, "offer_id": offer_id, "title": title, "price": price, "currency": currency, "mandate_reference": mandate}
+    return {"session_id": session_id, "execution_id": execution_id, "offer_id": offer_id, "title": title, "price": price, "currency": currency, "mandate_reference": mandate, "gate_decision": ev}
 
 
 @app.post("/api/orders/checkout")
@@ -390,6 +414,142 @@ async def checkout_from_selection(body: dict):
     conn.close()
 
     return {"order_id": order_id, "approve_url": approve_url, "status": "CREATED", "payment_id": payment_id}
+
+
+@app.post("/api/attestations")
+async def create_attestation(body: dict):
+    session_id = body.get("session_id")
+    execution_id = body.get("execution_id")
+    offer_id = body.get("offer_id")
+    rule_id = body.get("rule_id")
+    attested_value = body.get("attested_value")
+    source_url = body.get("source_url")
+    explanation = body.get("explanation")
+
+    if not session_id or not execution_id or not offer_id or not rule_id:
+        raise HTTPException(status_code=400, detail="session_id, execution_id, offer_id, and rule_id are required")
+    if not attested_value or str(attested_value).strip() == "":
+        raise HTTPException(status_code=400, detail="attested_value is required")
+    if not source_url or str(source_url).strip() == "":
+        raise HTTPException(status_code=400, detail="source_url is required")
+
+    ex = get_execution(execution_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail="execution not found")
+    if ex.get("session_id") != session_id:
+        raise HTTPException(status_code=403, detail="execution does not belong to session")
+
+    s = sessions.get(session_id)
+    if s is None:
+        ps = get_session(session_id)
+        if ps:
+            s = {"mandate": ps["mandate"], "locked": ps["locked"], "locked_mandate": ps["locked_mandate"], "category": ps.get("category"), "structured_filters": ps.get("structured_filters", {})}
+            sessions[session_id] = s
+    if not s or not s.get("locked"):
+        raise HTTPException(status_code=409, detail="mandate not locked — edit and relock the mandate, then perform a fresh search")
+
+    # Use the locked mandate (same object evaluate() receives).
+    mandate = s.get("locked_mandate") or s["mandate"]
+
+    # Verify the offer exists in this execution
+    offer = None
+    product = None
+    gate_entry = None
+    for r in ex.get("results", []):
+        o = r.get("offer")
+        if isinstance(o, dict) and o.get("offer_id") == offer_id:
+            offer = o
+            product = r.get("product")
+            gate_entry = r
+            break
+    if offer is None:
+        raise HTTPException(status_code=404, detail="offer not found")
+
+    gate = gate_entry.get("gate") if isinstance(gate_entry, dict) else None
+    if not isinstance(gate, dict):
+        raise HTTPException(status_code=404, detail="gate evaluation not found for offer")
+
+    # Find the specific rule in the current Policy Gate evaluation
+    rules = gate.get("rules") or []
+    target_rule = None
+    for r in rules:
+        if r.get("rule") == rule_id:
+            target_rule = r
+            break
+    if target_rule is None:
+        raise HTTPException(status_code=400, detail="unknown rule ID")
+
+    # Rule must be REQUIRED and unresolved (not passed, not failed)
+    if target_rule.get("priority") != "REQUIRED":
+        raise HTTPException(status_code=400, detail="rule is not REQUIRED")
+    if target_rule.get("passed") is True:
+        raise HTTPException(status_code=400, detail="rule is already satisfied")
+    if target_rule.get("status") == "FAILED":
+        raise HTTPException(status_code=400, detail="rule has failed — attestation cannot override a failure")
+    if target_rule.get("observed") not in (None, ""):
+        raise HTTPException(status_code=409, detail="rule has a demonstrated observed value — attestation cannot override")
+
+    # Verify fingerprints match current execution (same canonical inputs as evaluate()).
+    mandate_fp = canonical_fingerprint(mandate)
+    evidence_payload = build_product_evidence_payload(product if isinstance(product, dict) else {}, offer if isinstance(offer, dict) else None)
+    offer_evidence_fp = canonical_fingerprint(evidence_payload)
+    policy_version = gate.get("policy_version", POLICY_VERSION)
+
+    record = {
+        "id": str(uuid.uuid4()),
+        "session_id": session_id,
+        "execution_id": execution_id,
+        "offer_id": offer_id,
+        "rule_id": rule_id,
+        "attested_value": str(attested_value).strip(),
+        "source_url": str(source_url).strip(),
+        "explanation": explanation or "",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mandate_fingerprint": mandate_fp,
+        "offer_evidence_fingerprint": offer_evidence_fp,
+        "policy_version": policy_version,
+    }
+    save_attestation(record)
+    return {
+        "id": record["id"],
+        "session_id": session_id,
+        "execution_id": execution_id,
+        "offer_id": offer_id,
+        "rule_id": rule_id,
+        "attested_value": record["attested_value"],
+        "source_url": record["source_url"],
+        "timestamp": record["timestamp"],
+        "policy_version": record["policy_version"],
+    }
+
+
+@app.get("/api/attestations")
+async def list_attestations_endpoint(session_id: str = None, execution_id: str = None, offer_id: str = None, rule_id: str = None):
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    # If execution_id is supplied, verify it belongs to this session.
+    if execution_id is not None:
+        ex = get_execution(execution_id)
+        if not ex:
+            raise HTTPException(status_code=404, detail="execution not found")
+        if ex.get("session_id") != session_id:
+            raise HTTPException(status_code=403, detail="execution does not belong to session")
+    return list_attestations(session_id=session_id, execution_id=execution_id, offer_id=offer_id, rule_id=rule_id)
+
+
+@app.get("/api/attestations/{attestation_id}")
+async def get_attestation_endpoint(attestation_id: str, session_id: str):
+    att = get_attestation(attestation_id)
+    if not att:
+        raise HTTPException(status_code=404, detail="attestation not found")
+    if att.get("session_id") != session_id:
+        raise HTTPException(status_code=403, detail="attestation does not belong to session")
+    # Verify the attestation's execution belongs to the same session.
+    ex = get_execution(att.get("execution_id"))
+    if not ex or ex.get("session_id") != session_id:
+        raise HTTPException(status_code=403, detail="attestation execution does not belong to session")
+    return att
+
 
 @app.post("/api/orders/test")
 async def create_test_order():

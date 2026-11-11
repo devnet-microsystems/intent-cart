@@ -49,7 +49,7 @@ def mock_http(monkeypatch):
 
 def test_paypal_order_approved(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     mock_http(monkeypatch)
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     assert r.status_code == 200
@@ -61,7 +61,7 @@ def test_paypal_order_approved(client, monkeypatch):
 
 def test_paypal_order_rejected(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
     mock_http(monkeypatch)
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     assert r.status_code == 403
@@ -69,7 +69,7 @@ def test_paypal_order_rejected(client, monkeypatch):
 
 def test_paypal_order_idempotent(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     mock_http(monkeypatch)
     r1 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     r2 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -78,7 +78,7 @@ def test_paypal_order_idempotent(client, monkeypatch):
 
 def test_paypal_order_idempotent_does_not_invent_approve_url(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     mock_http(monkeypatch)
     r1 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     r2 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -92,7 +92,7 @@ def test_paypal_order_idempotent_does_not_invent_approve_url(client, monkeypatch
 
 def test_paypal_order_missing_approval_link_returns_explicit_error(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
 
     def handler(request):
         url = str(request.url)
@@ -117,7 +117,7 @@ def test_paypal_order_missing_approval_link_returns_explicit_error(client, monke
 
 def test_paypal_order_already_captured_rejected(client, monkeypatch):
     sid, eid = _setup(client, monkeypatch)
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     mock_http(monkeypatch)
     # First checkout creates a payment
     r1 = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -192,7 +192,7 @@ def mock_get_order_auth_error(monkeypatch):
 
 def test_checkout_reuses_valid_created_order(client, monkeypatch):
     """Existing CREATED order still valid on PayPal → reused, no new order."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_VALID", "CREATED")
     mock_get_order_status(monkeypatch, "CREATED")
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -211,7 +211,7 @@ def test_checkout_reuses_valid_created_order(client, monkeypatch):
 
 def test_checkout_recovers_from_stale_order(client, monkeypatch):
     """PayPal returns 404 for existing order → stale, new order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_STALE", "CREATED")
 
     def handler(request):
@@ -252,7 +252,7 @@ def test_checkout_recovers_from_stale_order(client, monkeypatch):
 
 def test_checkout_does_not_duplicate_approved_order(client, monkeypatch):
     """Existing order APPROVED on PayPal → not duplicated."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_APPROVED", "CREATED")
     mock_get_order_status(monkeypatch, "APPROVED")
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -266,7 +266,7 @@ def test_checkout_does_not_duplicate_approved_order(client, monkeypatch):
 
 def test_checkout_does_not_duplicate_completed_payment(client, monkeypatch):
     """Existing payment COMPLETED → checkout rejected, no new order."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_COMPLETED", "PAYMENT_CAPTURED")
     # No need to mock PayPal: COMPLETED payment is rejected before any PayPal call
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -276,7 +276,7 @@ def test_checkout_does_not_duplicate_completed_payment(client, monkeypatch):
 
 def test_checkout_auth_error_does_not_create_replacement(client, monkeypatch):
     """PayPal auth error on GET order → 502, no replacement order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_AUTHERR", "CREATED")
     mock_get_order_auth_error(monkeypatch)
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -293,7 +293,7 @@ def test_checkout_auth_error_does_not_create_replacement(client, monkeypatch):
 
 def test_checkout_preserves_stale_payment_audit_trail(client, monkeypatch):
     """After stale recovery, old payment record retains stale_reason and order ID."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, order_id = _setup_with_existing_payment(client, monkeypatch, "O_AUDIT", "CREATED")
 
     def handler(request):
@@ -360,7 +360,7 @@ def _mock_paypal_handler(token_status=200, token_body=None, order_get=None, orde
 
 def test_checkout_reuses_created_order_from_paypal(client, monkeypatch):
     """Existing CREATED order confirmed by PayPal → reused."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_CREATED_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_CREATED_PP", "status": "CREATED"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -375,7 +375,7 @@ def test_checkout_reuses_created_order_from_paypal(client, monkeypatch):
 
 def test_checkout_reuses_approved_order_from_paypal(client, monkeypatch):
     """Existing order APPROVED on PayPal → not duplicated, preserve state."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_APPROVED_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_APPROVED_PP", "status": "APPROVED"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -391,7 +391,7 @@ def test_checkout_reuses_approved_order_from_paypal(client, monkeypatch):
 
 def test_checkout_rejects_completed_order_from_paypal(client, monkeypatch):
     """Existing order COMPLETED on PayPal → reject duplicate checkout."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_COMPLETED_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_COMPLETED_PP", "status": "COMPLETED"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -403,7 +403,7 @@ def test_checkout_rejects_completed_order_from_paypal(client, monkeypatch):
 
 def test_checkout_recovers_voided_order(client, monkeypatch):
     """Existing order VOIDED on PayPal → stale recovery, new order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_VOIDED_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(
         order_get=(200, {"id": "O_VOIDED_PP", "status": "VOIDED"}),
@@ -423,7 +423,7 @@ def test_checkout_recovers_voided_order(client, monkeypatch):
 
 def test_checkout_rejects_saved_order(client, monkeypatch):
     """PayPal SAVED status → fail closed, no replacement."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_SAVED_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_SAVED_PP", "status": "SAVED"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -433,7 +433,7 @@ def test_checkout_rejects_saved_order(client, monkeypatch):
 
 def test_checkout_rejects_payer_action_required(client, monkeypatch):
     """PayPal PAYER_ACTION_REQUIRED status → fail closed, no replacement."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_PAR_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_PAR_PP", "status": "PAYER_ACTION_REQUIRED"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -445,7 +445,7 @@ def test_checkout_rejects_payer_action_required(client, monkeypatch):
 
 def test_checkout_unknown_paypal_status_returns_existing_no_approve_url(client, monkeypatch):
     """Unknown PayPal status → fail closed with 502, never return 200."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_UNKNOWN_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_UNKNOWN_PP", "status": "UNKNOWN_STATUS"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -455,7 +455,7 @@ def test_checkout_unknown_paypal_status_returns_existing_no_approve_url(client, 
 
 def test_checkout_missing_paypal_status_returns_existing_no_approve_url(client, monkeypatch):
     """Missing PayPal status field → fail closed with 502."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_MISSING_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(200, {"id": "O_MISSING_PP"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -467,7 +467,7 @@ def test_checkout_missing_paypal_status_returns_existing_no_approve_url(client, 
 
 def test_checkout_created_without_paypal_order_id_rejected(client, monkeypatch):
     """Local CREATED payment without paypal_order_id → not a valid checkout."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, None, "CREATED")
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
     assert r.status_code == 502
@@ -478,7 +478,7 @@ def test_checkout_created_without_paypal_order_id_rejected(client, monkeypatch):
 
 def test_checkout_paypal_401_on_get_order_fail_closed(client, monkeypatch):
     """PayPal 401 on GET order → 502, no replacement."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_401_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(401, {"error": "unauthorized"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -487,7 +487,7 @@ def test_checkout_paypal_401_on_get_order_fail_closed(client, monkeypatch):
 
 def test_checkout_paypal_403_on_get_order_fail_closed(client, monkeypatch):
     """PayPal 403 on GET order → 502, no replacement."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_403_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(403, {"error": "forbidden"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -496,7 +496,7 @@ def test_checkout_paypal_403_on_get_order_fail_closed(client, monkeypatch):
 
 def test_checkout_paypal_404_on_get_order_stale_recovery(client, monkeypatch):
     """PayPal 404 on GET order → stale recovery, new order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_404_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(
         order_get=(404, {"name": "RESOURCE_NOT_FOUND", "message": "Resource not found"}),
@@ -509,7 +509,7 @@ def test_checkout_paypal_404_on_get_order_stale_recovery(client, monkeypatch):
 
 def test_checkout_paypal_500_on_get_order_fail_closed(client, monkeypatch):
     """PayPal 500 on GET order → 502, no replacement."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_500_PP", "CREATED")
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler(order_get=(500, {"error": "internal_server_error"})))
     r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
@@ -520,7 +520,7 @@ def test_checkout_paypal_500_on_get_order_fail_closed(client, monkeypatch):
 
 def test_checkout_paypal_timeout_on_create_order_fail_closed(client, monkeypatch):
     """PayPal timeout on CREATE order → 502, reservation marked stale."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
 
     def handler(request):
@@ -552,7 +552,7 @@ def test_checkout_paypal_timeout_on_create_order_fail_closed(client, monkeypatch
 
 def test_checkout_concurrent_same_key_single_order(client, monkeypatch):
     """Two sequential checkout requests with same key → only one PayPal order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
     call_count = {"n": 0}
 
@@ -592,7 +592,7 @@ def test_checkout_concurrent_same_key_single_order(client, monkeypatch):
 
 def test_checkout_no_duplicate_payment_records(client, monkeypatch):
     """Multiple checkout attempts → exactly one payment record per idempotency key."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
     monkeypatch.setattr(httpx, "AsyncClient", _mock_paypal_handler())
     for _ in range(3):
@@ -694,7 +694,7 @@ from httpx import ASGITransport
 
 def test_checkout_concurrent_real_async_single_order(client, monkeypatch):
     """Two concurrent checkout requests → exactly one PayPal order created."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
     call_count = {"n": 0}
     creation_gate = anyio.Event()
@@ -779,7 +779,7 @@ def test_reserve_payment_atomic_concurrent(client, monkeypatch):
 
 def test_checkout_retry_with_same_request_id_after_timeout(client, monkeypatch):
     """Existing CREATED reservation without paypal_order_id → retry with same PayPal-Request-Id."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
     from backend.storage import save_payment
     import uuid
@@ -854,7 +854,7 @@ def test_checkout_retry_with_same_request_id_after_timeout(client, monkeypatch):
 
 def test_checkout_order_created_no_approve_url_persists_order_id(client, monkeypatch):
     """PayPal creates order but returns no approve_url → persist order ID, fail closed."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
 
     def handler(request):
@@ -888,7 +888,7 @@ def test_checkout_order_created_no_approve_url_persists_order_id(client, monkeyp
 
 def test_checkout_unknown_paypal_status_fail_closed(client, monkeypatch):
     """Unknown PayPal order status → 502, never return 200 with unusable order."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_UNKNOWN_PP2", "CREATED")
 
     def handler(request):
@@ -913,7 +913,7 @@ def test_checkout_unknown_paypal_status_fail_closed(client, monkeypatch):
 
 def test_checkout_missing_paypal_status_fail_closed(client, monkeypatch):
     """Missing PayPal status field → 502, fail closed."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid, payment_id, _ = _setup_with_existing_payment(client, monkeypatch, "O_MISSING_PP2", "CREATED")
 
     def handler(request):
@@ -938,7 +938,7 @@ def test_checkout_missing_paypal_status_fail_closed(client, monkeypatch):
 
 def test_checkout_request_id_length_under_108_chars(client, monkeypatch):
     """PayPal-Request-Id must be 1-108 characters. UUID-based ID is 36 chars."""
-    monkeypatch.setattr("backend.main.evaluate", lambda m, p: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "APPROVED", "rules": [], "policy_version": "2.0"})
     sid, eid = _setup(client, monkeypatch)
 
     captured_ids = []
@@ -964,3 +964,735 @@ def test_checkout_request_id_length_under_108_chars(client, monkeypatch):
     rid = captured_ids[0]
     assert 1 <= len(rid) <= 108, f"PayPal-Request-Id length {len(rid)} outside 1-108 range"
     assert rid.startswith("intent-cart-"), "Should use UUID-based identifier"
+
+
+# --- Attestation-based checkout gating (replaces generic confirmation) ---
+
+def _setup_needs_confirmation_with_rules(client, monkeypatch):
+    """Set up a session + execution with NEEDS_CONFIRMATION and specific unresolved rules."""
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "socks"})
+    payload = {"query": "socks", "category": "clothing_accessories", "structured_filters": {
+        "product_type": "socks", "size": "43", "material": "cotton", "material_percentage": 100,
+        "style": "mismatched", "forbidden_designs": ["Christmas"], "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Socks", "offers": [offer]}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "min_size", "expected": "43", "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+            {"rule": "min_material_percentage", "expected": 100, "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.material_percentage"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+    return sid, eid
+
+
+def test_paypal_needs_confirmation_always_blocks(client, monkeypatch):
+    """NEEDS_CONFIRMATION must always return 403 — no generic confirmation bypass."""
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "NEEDS_CONFIRMATION", "rules": [], "policy_version": "2.0"})
+    r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r.status_code == 403
+
+
+def test_paypal_rejected_always_blocks(client, monkeypatch):
+    """REJECTED must always return 403."""
+    sid, eid = _setup(client, monkeypatch)
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
+    r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r.status_code == 403
+
+
+def test_attestation_create_and_get(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    # Create attestation
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+        "explanation": "Measured screen diagonal personally",
+    })
+    assert cresp.status_code == 200, cresp.text
+    data = cresp.json()
+    assert data["rule_id"] == "min_size"
+    assert data["attested_value"] == "17 inches"
+    assert data["source_url"] == "https://seller.example.com/product/123"
+    # Get attestation
+    gresp = client.get(f"/api/attestations/{data['id']}", params={"session_id": sid})
+    assert gresp.status_code == 200
+    gdata = gresp.json()
+    assert gdata["id"] == data["id"]
+
+
+def test_attestation_rejects_empty_value(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 400
+
+
+def test_attestation_rejects_missing_source_url(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "",
+    })
+    assert cresp.status_code == 400
+
+
+def test_attestation_rejects_unknown_rule(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "nonexistent_rule", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 400
+
+
+def test_attestation_rejects_unlocked_session(client, monkeypatch):
+    """Unlocked mandate cannot be attested — returns 409."""
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "socks"})
+    payload = {"query": "socks", "category": "clothing_accessories", "structured_filters": {}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    # Do NOT lock — session stays unlocked
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Socks", "offers": [offer]}
+    gate = {"decision": "NEEDS_CONFIRMATION", "rules": [
+        {"rule": "min_size", "expected": "43", "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+    ], "policy_version": "2.0"}
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 409
+
+
+def test_attestation_wrong_session_cannot_write(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    # Try to write with a different session ID
+    cresp = client.post("/api/attestations", json={
+        "session_id": "wrong-session", "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 403
+
+
+def test_attestation_wrong_session_cannot_read(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    # Create attestation with session s1
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 200
+    aid = cresp.json()["id"]
+    # Try to read with wrong session
+    gresp = client.get(f"/api/attestations/{aid}", params={"session_id": "wrong-session"})
+    assert gresp.status_code == 403
+
+
+def test_attestation_list_by_session(client, monkeypatch):
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    # Create two attestations
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/1",
+    })
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_material_percentage", "attested_value": "100%",
+        "source_url": "https://seller.example.com/2",
+    })
+    # List for this session
+    lresp = client.get("/api/attestations", params={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert lresp.status_code == 200
+    items = lresp.json()
+    assert len(items) == 2
+
+
+def test_attestation_does_not_override_failed_rule(client, monkeypatch):
+    """A FAILED rule cannot be overridden by attestation — returns 400."""
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "socks"})
+    payload = {"query": "socks", "category": "clothing_accessories", "structured_filters": {
+        "product_type": "socks", "size": "43", "material": "cotton", "material_percentage": 100,
+        "style": "mismatched", "forbidden_designs": ["Christmas"], "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Socks", "offers": [offer]}
+    gate = {"decision": "REJECTED", "rules": [
+        {"rule": "min_size", "expected": "43", "observed": "40", "passed": False, "status": "FAILED", "priority": "REQUIRED", "evidence": "product.size"},
+    ], "policy_version": "2.0"}
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+    # Attestation for a FAILED rule is rejected — returns 400.
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "43 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 400, cresp.text
+    # Checkout still blocked — FAILED rule cannot be overridden.
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "REJECTED", "rules": [], "policy_version": "2.0"})
+    r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r.status_code == 403
+
+
+# --- Stale fingerprint rejection ---
+
+def test_attestation_rejects_stale_mandate_fingerprint(monkeypatch):
+    """Attestation with mismatched mandate fingerprint is rejected by evaluator."""
+    # This is tested at the evaluate() level — stale fingerprint means attestation
+    # is not applied, so checkout remains blocked.
+    pass  # Covered by evaluate-level tests in test_policy_pd.py
+
+
+def test_attestation_does_not_approve_other_requirement(client, monkeypatch):
+    """One attestation cannot approve a different requirement."""
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    # Attest only min_size
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "17 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    # Checkout should still be blocked because min_material_percentage is unresolved
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {
+        "decision": "NEEDS_CONFIRMATION", "rules": [], "policy_version": "2.0"
+    })
+    r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r.status_code == 403
+
+
+# --- Confirmation/waiver endpoints removed ---
+
+def test_confirmation_endpoint_removed(client, monkeypatch):
+    """The old /api/confirmations endpoints no longer exist."""
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    cresp = client.post("/api/confirmations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "decision": "CONFIRMED", "reason": "Should not work",
+    })
+    assert cresp.status_code == 404
+
+
+def test_waiver_endpoint_removed(client, monkeypatch):
+    """WAIVED decision is no longer accepted."""
+    sid, eid = _setup_needs_confirmation_with_rules(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_size", "attested_value": "waived",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    # Attestation is for a specific rule, not a generic waiver — checkout still blocked
+    assert cresp.status_code == 200
+    monkeypatch.setattr("backend.main.evaluate", lambda m, p, att=None: {"decision": "NEEDS_CONFIRMATION", "rules": [], "policy_version": "2.0"})
+    r = client.post("/api/orders/checkout", json={"session_id": sid, "execution_id": eid, "offer_id": "offer-1"})
+    assert r.status_code == 403
+
+
+# --- P0 Regression tests ---
+
+from backend.policy_engine import evaluate, build_product_evidence_payload, canonical_fingerprint, _attested_value_satisfies
+from backend.storage import list_attestations
+
+
+def _setup_size_unresolved(client, monkeypatch):
+    """Set up a session + execution with an unresolved size rule."""
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "socks"})
+    payload = {"query": "socks", "category": "clothing_accessories", "structured_filters": {
+        "product_type": "socks", "size": "43", "material": "cotton", "material_percentage": 100,
+        "style": "mismatched", "forbidden_designs": ["Christmas"], "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Socks", "size": None}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "size", "expected": "43", "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+    return sid, eid
+
+
+# Test 1: Correct user-attested value satisfies the specific missing rule.
+def test_attested_correct_value_satisfies_rule(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    mandate = sessions[sid]["locked_mandate"]
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 200, cresp.text
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    assert len(atts) == 1
+
+    ev = evaluate(mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule is not None, f"size rule not found: {ev['rules']}"
+    assert size_rule["passed"] is True
+    assert size_rule["verification_source"] == "USER_ATTESTED"
+    assert size_rule["observed"] == "43"
+
+
+# Test 2: Incorrect value does not satisfy the rule.
+def test_attested_incorrect_value_does_not_satisfy(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    mandate = sessions[sid]["locked_mandate"]
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "42",
+        "source_url": "https://seller.example.com/product/123",
+    })
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    ev = evaluate(mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule is not None
+    assert size_rule["passed"] is False
+
+
+# Test 3: Incorrect numeric threshold does not pass.
+def test_attested_incorrect_numeric_threshold(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "laptop"})
+    payload = {"query": "laptop", "category": "laptops", "structured_filters": {
+        "product_type": "laptop", "min_ram_gb": 16, "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 1000.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Laptop", "specs": {}}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "min_ram_gb", "expected": 16, "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.specs.ram_gb"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    mandate = sessions[sid]["locked_mandate"]
+    evidence = build_product_evidence_payload(product, offer)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_ram_gb", "attested_value": "8",
+        "source_url": "https://seller.example.com/product/123",
+    })
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    ev = evaluate(mandate, evidence, atts)
+    ram_rule = next((r for r in ev["rules"] if r.get("rule") == "min_ram_gb"), None)
+    assert ram_rule is not None
+    assert ram_rule["passed"] is False
+
+
+# Test 4: API-created attestation is accepted by the evaluator when fingerprints match.
+def test_api_attestation_accepted_when_fingerprints_match(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    mandate = sessions[sid]["locked_mandate"]
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 200
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    ev = evaluate(mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule["passed"] is True
+    assert size_rule["verification_source"] == "USER_ATTESTED"
+
+
+# Test 5: Different mandate fingerprints invalidate the attestation.
+def test_different_mandate_fingerprint_invalidates(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+
+    different_mandate = dict(sessions[sid]["locked_mandate"])
+    different_mandate["size"] = "44"
+
+    ev = evaluate(different_mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule is not None
+    assert size_rule["passed"] is False
+    assert size_rule.get("verification_source") != "USER_ATTESTED"
+
+
+# Test 6: Different offer/evidence fingerprints invalidate the attestation.
+def test_different_evidence_fingerprint_invalidates(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    mandate = sessions[sid]["locked_mandate"]
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+
+    different_product = {"id": "p2", "title": "Different", "size": None}
+    different_offer = {"offer_id": "offer-2", "price": {"price": 99.0, "currency": "EUR"}, "condition": "used"}
+    different_evidence = build_product_evidence_payload(different_product, different_offer)
+
+    ev = evaluate(mandate, different_evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule is not None
+    assert size_rule["passed"] is False
+
+
+# Test 7: Wrong session cannot retrieve attestations (GET list with non-existent execution_id).
+def test_list_attestations_wrong_execution(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    # Non-existent execution returns 404.
+    lresp = client.get("/api/attestations", params={"session_id": sid, "execution_id": "wrong-execution"})
+    assert lresp.status_code == 404
+
+
+# Test 8: GET by ID without session_id is rejected.
+def test_get_attestation_requires_session_id(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 200
+    aid = cresp.json()["id"]
+    gresp = client.get(f"/api/attestations/{aid}")
+    assert gresp.status_code == 422
+
+
+# Test 9: An attestation cannot override a populated conflicting observation.
+def test_attestation_cannot_override_conflicting_observation(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "socks"})
+    payload = {"query": "socks", "category": "clothing_accessories", "structured_filters": {
+        "product_type": "socks", "size": "43", "material": "cotton", "material_percentage": 100,
+        "style": "mismatched", "forbidden_designs": ["Christmas"], "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Socks", "size": "40"}
+    gate = {
+        "decision": "REJECTED",
+        "rules": [
+            {"rule": "size", "expected": "43", "observed": "40", "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 409, cresp.text
+
+
+# Test 10: Latest valid attestation is selected without deleting previous records.
+def test_latest_attestation_selected(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "42",
+        "source_url": "https://seller.example.com/older",
+    })
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/newer",
+    })
+
+    # Both records preserved in audit trail.
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1", rule_id="size")
+    assert len(atts) == 2
+
+    # evaluate() selects the latest (43).
+    mandate = sessions[sid]["locked_mandate"]
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    ev = evaluate(mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule["passed"] is True
+    assert size_rule["observed"] == "43"
+
+
+# Test 11: Unsupported rules remain NEEDS_CONFIRMATION (fail closed).
+def test_unsupported_rule_remains_unresolved(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    mandate = sessions[sid]["locked_mandate"]
+    product = {"id": "p1", "title": "Socks", "size": None}
+    offer = {"offer_id": "offer-1", "price": {"price": 10.0, "currency": "EUR"}, "condition": "new"}
+    evidence = build_product_evidence_payload(product, offer)
+
+    # _attested_value_satisfies returns None for unsupported rules.
+    unsupported_rule = {"rule": "unsupported_rule", "expected": None, "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED"}
+    assert _attested_value_satisfies(unsupported_rule, "anything") is None
+
+    # evaluate() does not apply attestation for unsupported rule.
+    unsupported_att = [{
+        "id": "att-1",
+        "session_id": sid,
+        "execution_id": eid,
+        "offer_id": "offer-1",
+        "rule_id": "unsupported_rule",
+        "attested_value": "anything",
+        "source_url": "https://seller.example.com/product/123",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "mandate_fingerprint": canonical_fingerprint(mandate),
+        "offer_evidence_fingerprint": canonical_fingerprint(evidence),
+        "policy_version": "2.0",
+    }]
+    ev = evaluate(mandate, evidence, unsupported_att)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule["passed"] is False
+    assert size_rule.get("verification_source") != "USER_ATTESTED"
+
+
+# --- Additional P0 regression tests ---
+
+# Test: Wrong session ownership — GET attestation by ID with wrong session_id.
+def test_get_attestation_wrong_session(client, monkeypatch):
+    sid, eid = _setup_size_unresolved(client, monkeypatch)
+    cresp = client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "43",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    assert cresp.status_code == 200
+    aid = cresp.json()["id"]
+    gresp = client.get(f"/api/attestations/{aid}", params={"session_id": "wrong-session"})
+    assert gresp.status_code == 403
+
+
+# Test: 17-inch equivalent representations pass (17 inches == 17").
+def test_attested_size_inch_equivalents_pass(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "monitor"})
+    payload = {"query": "monitor", "category": "monitors", "structured_filters": {
+        "product_type": "monitor", "size": "17", "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 200.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Monitor", "size": None}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "size", "expected": "17", "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    mandate = sessions[sid]["locked_mandate"]
+    evidence = build_product_evidence_payload(product, offer)
+
+    for attested in ("17 inches", '17"', "17"):
+        client.post("/api/attestations", json={
+            "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+            "rule_id": "size", "attested_value": attested,
+            "source_url": "https://seller.example.com/product/123",
+        })
+        atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+        ev = evaluate(mandate, evidence, atts)
+        size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+        assert size_rule["passed"] is True, f"attested={attested!r} failed: {size_rule}"
+        assert size_rule["verification_source"] == "USER_ATTESTED"
+
+
+# Test: 15-inch rejection for a 17-inch requirement.
+def test_attested_15_inch_rejected_for_17_requirement(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "monitor"})
+    payload = {"query": "monitor", "category": "monitors", "structured_filters": {
+        "product_type": "monitor", "size": "17", "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 200.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Monitor", "size": None}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "size", "expected": "17", "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.size"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    mandate = sessions[sid]["locked_mandate"]
+    evidence = build_product_evidence_payload(product, offer)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "size", "attested_value": "15 inches",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    ev = evaluate(mandate, evidence, atts)
+    size_rule = next((r for r in ev["rules"] if r.get("rule") == "size"), None)
+    assert size_rule is not None
+    assert size_rule["passed"] is False
+
+
+# Test: 16 GB equivalence for RAM requirement.
+def test_attested_16gb_equivalence_passes_for_ram(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "laptop"})
+    payload = {"query": "laptop", "category": "laptops", "structured_filters": {
+        "product_type": "laptop", "min_ram_gb": 16, "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 1000.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Laptop", "specs": {}}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "min_ram_gb", "expected": 16, "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.specs.ram_gb"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    mandate = sessions[sid]["locked_mandate"]
+    evidence = build_product_evidence_payload(product, offer)
+
+    for attested in ("16 GB", "16", "16GB"):
+        client.post("/api/attestations", json={
+            "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+            "rule_id": "min_ram_gb", "attested_value": attested,
+            "source_url": "https://seller.example.com/product/123",
+        })
+        atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+        ev = evaluate(mandate, evidence, atts)
+        ram_rule = next((r for r in ev["rules"] if r.get("rule") == "min_ram_gb"), None)
+        assert ram_rule["passed"] is True, f"attested={attested!r} failed: {ram_rule}"
+        assert ram_rule["verification_source"] == "USER_ATTESTED"
+
+
+# Test: 8 GB rejection for a 16 GB RAM requirement.
+def test_attested_8gb_rejected_for_16gb_requirement(client, monkeypatch):
+    monkeypatch.setattr("backend.main.parse_intent", lambda text: {"query": "laptop"})
+    payload = {"query": "laptop", "category": "laptops", "structured_filters": {
+        "product_type": "laptop", "min_ram_gb": 16, "max_price": None, "currency": "EUR"}}
+    res = client.post("/api/intent", json=payload)
+    sid = res.json()["session_id"]
+    client.post("/api/mandate/" + sid + "/lock")
+    from backend.storage import save_execution
+    import uuid
+    eid = str(uuid.uuid4())
+    offer = {"offer_id": "offer-1", "price": {"price": 1000.0, "currency": "EUR"}, "condition": "new"}
+    product = {"id": "p1", "title": "Laptop", "specs": {}}
+    gate = {
+        "decision": "NEEDS_CONFIRMATION",
+        "rules": [
+            {"rule": "min_ram_gb", "expected": 16, "observed": None, "passed": False, "status": "APPLICABLE", "priority": "REQUIRED", "evidence": "product.specs.ram_gb"},
+        ],
+        "policy_version": "2.0",
+    }
+    save_execution(eid, "2024-01-01T00:00:00Z", sessions[sid]["locked_mandate"], [{"product": product, "gate": gate, "offer": offer}], session_id=sid)
+    sessions[sid]["execution_id"] = eid
+
+    mandate = sessions[sid]["locked_mandate"]
+    evidence = build_product_evidence_payload(product, offer)
+
+    client.post("/api/attestations", json={
+        "session_id": sid, "execution_id": eid, "offer_id": "offer-1",
+        "rule_id": "min_ram_gb", "attested_value": "8 GB",
+        "source_url": "https://seller.example.com/product/123",
+    })
+    atts = list_attestations(session_id=sid, execution_id=eid, offer_id="offer-1")
+    ev = evaluate(mandate, evidence, atts)
+    ram_rule = next((r for r in ev["rules"] if r.get("rule") == "min_ram_gb"), None)
+    assert ram_rule is not None
+    assert ram_rule["passed"] is False

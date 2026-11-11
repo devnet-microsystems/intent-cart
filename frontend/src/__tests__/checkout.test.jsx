@@ -1098,6 +1098,181 @@ it("historical execution + APPROVED + locked=false → PayPal disabled", async (
     expect(container.querySelector(".checkout > div > div")).toBeNull();
   });
 
+  // --- Attestation workflow tests ---
+
+  const needsConfirmationSearchResponse = {
+    execution_id: "e1",
+    mandate: { query: "socks" },
+    results: [
+      {
+        product: { title: "Confirm Socks", images: [], offers: [{ offer_id: "offer-1", price: { price: 10, currency: "EUR" }, condition: "new" }] },
+        gate: {
+          decision: "NEEDS_CONFIRMATION",
+          rules: [
+            { rule: "min_size", expected: "43", observed: null, passed: false, status: "APPLICABLE", priority: "REQUIRED", evidence: "product.size" },
+            { rule: "material", expected: "cotton", observed: null, passed: false, status: "APPLICABLE", priority: "REQUIRED", evidence: "product.material" },
+          ],
+          policy_version: "2.0",
+        },
+        offer: { offer_id: "offer-1", price: { price: 10, currency: "EUR" } },
+      },
+    ],
+  };
+
+  function setupFetchWithAttestations(searchResponse, executions = []) {
+    let attestations = {};
+    mockFetch.mockImplementation(async (url, opts) => {
+      const u = String(url);
+      const o = opts || {};
+      const method = o.method || "GET";
+      if (u === "http://127.0.0.1:8000/api/executions") return json(200, executions);
+      if (u.startsWith("http://127.0.0.1:8000/api/executions/") && method === "GET") {
+        const id = u.substring(u.lastIndexOf("/") + 1);
+        if (searchResponse && searchResponse.execution_id === id) {
+          return json(200, { execution_id: id, ...searchResponse });
+        }
+        return json(404, {});
+      }
+      if (u === "http://127.0.0.1:8000/api/intent" && method === "POST")
+        return json(200, { session_id: "s1", mandate: searchResponse.mandate });
+      if (u === "http://127.0.0.1:8000/api/mandate/s1/lock" && method === "POST")
+        return json(200, { locked: true, mandate: {} });
+      if (u === "http://127.0.0.1:8000/api/search/s1" && method === "POST")
+        return json(200, searchResponse);
+      if (u === "http://127.0.0.1:8000/api/attestations" && method === "POST") {
+        const body = JSON.parse(o.body || "{}");
+        const key = `${body.execution_id}:${body.offer_id}:${body.rule_id}`;
+        attestations[key] = { ...body, id: "a1", timestamp: "2026-01-01T00:00:00Z" };
+        return json(200, { id: "a1", ...body, timestamp: "2026-01-01T00:00:00Z" });
+      }
+      if (u.startsWith("http://127.0.0.1:8000/api/attestations") && method === "GET") {
+        if (u.includes("/api/attestations/")) {
+          const id = u.substring(u.lastIndexOf("/") + 1);
+          const found = Object.values(attestations).find((a) => a.id === id);
+          if (found) {
+            const qs = new URLSearchParams(u.split("?")[1] || "");
+            if (qs.get("session_id") && qs.get("session_id") !== found.session_id) {
+              return json(403, { detail: "attestation does not belong to session" });
+            }
+            return json(200, found);
+          }
+          return json(404, {});
+        }
+        // List endpoint
+        const qs = new URLSearchParams(u.split("?")[1] || "");
+        const sessionFilter = qs.get("session_id");
+        const execFilter = qs.get("execution_id");
+        const offerFilter = qs.get("offer_id");
+        const ruleFilter = qs.get("rule_id");
+        const filtered = Object.values(attestations).filter((a) => {
+          if (sessionFilter && a.session_id !== sessionFilter) return false;
+          if (execFilter && a.execution_id !== execFilter) return false;
+          if (offerFilter && a.offer_id !== offerFilter) return false;
+          if (ruleFilter && a.rule_id !== ruleFilter) return false;
+          return true;
+        });
+        return json(200, filtered);
+      }
+      if (u.includes("/api/orders/checkout") && method === "POST") {
+        lastCheckoutBody = JSON.parse(o.body || "{}");
+        const key = `${lastCheckoutBody.execution_id}:${lastCheckoutBody.offer_id}`;
+        // Checkout requires fresh APPROVED — attestations don't change the gate decision in this mock
+        if (searchResponse.results[0].gate.decision === "NEEDS_CONFIRMATION") {
+          return json(403, { detail: "offer not approved" });
+        }
+        if (checkoutResolver) {
+          return new Promise((res) => {
+            checkoutResolver = res;
+          });
+        }
+        return json(200, {
+          order_id: "O1",
+          approve_url: "https://approve",
+          status: "CREATED",
+          payment_id: "p1",
+        });
+      }
+      if (u.includes("/api/orders/capture") && method === "POST") {
+        lastCaptureBody = JSON.parse(o.body || "{}");
+        return json(200, {
+          status: "PAYMENT_CAPTURED",
+          capture_id: "CAP1",
+          amount: "10.00",
+          currency: "EUR",
+        });
+      }
+      return json(404, {});
+    });
+    return attestations;
+  }
+
+  it("NEEDS_CONFIRMATION product shows attestation form, not confirmation buttons", async () => {
+    setupFetchWithAttestations(needsConfirmationSearchResponse);
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    // No Confirm/Waive buttons
+    expect(
+      within(container).queryByText("Confirm & Approve")
+    ).toBeNull();
+    expect(
+      within(container).queryByText("Waive & Proceed")
+    ).toBeNull();
+    // Attestation panel should be visible
+    expect(
+      within(container).getAllByText("User attestation required for unresolved requirements:").length
+    ).toBeGreaterThan(0);
+    // PayPal should NOT be mounted
+    expect(container.querySelector(".checkout > div > div")).toBeNull();
+  });
+
+  it("Attestation form requires value, source URL, and confirmation checkbox", async () => {
+    setupFetchWithAttestations(needsConfirmationSearchResponse);
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    // Try to submit without filling in the form
+    const submitBtn = within(container).getAllByText("Submit attestation")[0];
+    fireEvent.click(submitBtn);
+    await settle();
+    // Should show error about missing value/source/confirmation
+    expect(
+      within(container).getAllByText("Please provide value, source URL, and confirm you checked.").length
+    ).toBeGreaterThan(0);
+    // PayPal still not mounted
+    expect(container.querySelector(".checkout > div > div")).toBeNull();
+  });
+
+  it("APPROVED product does not show attestation panel", async () => {
+    setupFetch(approvedSearchResponse);
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    // No attestation panel for APPROVED
+    expect(
+      within(container).queryByText("User attestation required for unresolved requirements:")
+    ).toBeNull();
+    // PayPal should be mounted directly
+    expect(container.querySelector(".checkout > div > div")).toBeTruthy();
+  });
+
+  it("REJECTED product remains blocked with no attestation panel", async () => {
+    setupFetch({
+      execution_id: "e1",
+      mandate: { query: "socks" },
+      results: [
+        {
+          product: { title: "Rejected Socks", images: [], offers: [{ offer_id: "offer-1", price: { price: 10, currency: "EUR" }, condition: "new" }] },
+          gate: { decision: "REJECTED", rules: [], policy_version: "2.0" },
+          offer: { offer_id: "offer-1", price: { price: 10, currency: "EUR" } },
+        },
+      ],
+    });
+    const { container } = render(<App />);
+    await completeSearchFlow(container);
+    expect(
+      within(container).queryByText("User attestation required for unresolved requirements:")
+    ).toBeNull();
+    expect(container.querySelector(".checkout > div > div")).toBeNull();
+  });
+
   describe("History execution selection", () => {
     const targetExecutionId = "11aac7e1-56a4-40f7-9def-445e86f58cde";
 
