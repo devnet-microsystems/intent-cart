@@ -30,6 +30,13 @@ class Mandate(BaseModel):
     color: Optional[str] = None
     clarification_required: Optional[Any] = None
     condition: Optional[str] = None
+
+    # Market context: country, currency, language. Extracted from explicit user
+    # request only — never inferred from currency alone. Backward compatible:
+    # historical sessions may lack these fields (default None).
+    country: Optional[str] = None
+    currency: str = "EUR"
+    language: Optional[str] = None
     # Laptop vertical (P1 Step 4A): additive, optional, schema-only. Do NOT map
     # these fields into min_specs or policy decisions until Step 4B.
     product_type: Optional[str] = None
@@ -40,6 +47,27 @@ class Mandate(BaseModel):
     required_processor_subfamily: Optional[str] = None
     required_processor_model: Optional[str] = None
     required_operating_system: Optional[str] = None
+
+    # Pack quantity (P0 purchase path): number of sellable units per pack
+    # (e.g. 5 for a 5-pack of socks). pack_unit describes what is counted
+    # (pair, piece, set, ...). Never infer from ambiguous text.
+    pack_quantity: Optional[int] = None
+    pack_unit: Optional[str] = None
+
+    # Availability requirement (e.g. "in stock", "InStock"). When set, the
+    # Policy Gate verifies the offer's availability matches this value.
+    availability: Optional[str] = None
+
+    @field_validator("pack_quantity", mode="before")
+    @classmethod
+    def _validate_pack_quantity(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError("pack_quantity must be a positive integer")
+        if v <= 0:
+            raise ValueError("pack_quantity must be a positive integer")
+        return v
 
     @field_validator("min_specs", mode="before")
     @classmethod
@@ -252,6 +280,50 @@ def _normalize_extracted_mandate(data: Dict[str, Any], user_text: str = "") -> D
     elif out.get("colour") is not None and out.get("color") is not None:
         # Both present: keep canonical `color`, drop `colour` to avoid ambiguity.
         out.pop("colour")
+
+    # Preserve compound style requirements: if Gemini put style keywords in
+    # technical_specs instead of the style field, merge them into style.
+    # This is deterministic and traceable to explicit words in the user text.
+    _STYLE_KEYWORDS = {
+        "ribbed", "crew", "ankle", "knee-high", "knee high", "no-show",
+        "low-cut", "low cut",
+    }
+    tech_specs = out.get("technical_specs")
+    style_from_specs: list[str] = []
+    remaining_specs: Any = tech_specs
+    if isinstance(tech_specs, list):
+        style_from_specs = [
+            s for s in tech_specs
+            if isinstance(s, str) and s.strip().lower() in _STYLE_KEYWORDS
+        ]
+        remaining_specs = [
+            s for s in tech_specs
+            if not (isinstance(s, str) and s.strip().lower() in _STYLE_KEYWORDS)
+        ]
+    elif isinstance(tech_specs, dict):
+        for _key, _val in tech_specs.items():
+            if isinstance(_val, str) and _val.strip().lower() in _STYLE_KEYWORDS:
+                style_from_specs.append(_val)
+        remaining_specs = {
+            k: v for k, v in tech_specs.items()
+            if not (isinstance(v, str) and v.strip().lower() in _STYLE_KEYWORDS)
+        }
+    # Always apply canonical ordering to the style field when present,
+    # ensuring compound requirements like "ribbed crew" are deterministic.
+    _CANONICAL_STYLE_ORDER = ["ribbed", "crew", "ankle", "knee-high", "knee high", "no-show", "low-cut", "low cut"]
+    existing_style = out.get("style")
+    if existing_style and isinstance(existing_style, str):
+        words = existing_style.split()
+        # Add any new style keywords from technical_specs
+        for w in style_from_specs:
+            if w.strip().lower() not in (x.lower() for x in words):
+                words.append(w.strip())
+        ordered = sorted(words, key=lambda w: _CANONICAL_STYLE_ORDER.index(w.strip().lower()) if w.strip().lower() in _CANONICAL_STYLE_ORDER else 999)
+        out["style"] = " ".join(ordered)
+        if style_from_specs:
+            remaining_specs = remaining_specs if remaining_specs else {}
+            out["technical_specs"] = remaining_specs
+
     out = _canonicalize_cpu_requirements(out)
     return out
 
@@ -269,7 +341,10 @@ def parse_intent(text: str) -> dict:
     prompt = (
         "Extract a purchasing mandate as JSON matching the provided schema. "
         "query must be a non-empty search string. max_price must be a number without currency symbols, or null if the user did not specify a budget. "
-        "currency must be an ISO code such as EUR. "
+        "currency must be an ISO code such as EUR or USD. "
+        "country must be an ISO code such as US or IT — extract only when explicitly stated in the user request (e.g. \"for delivery in the United States\", \"US market\", \"in Italy\"). "
+        "language must be an ISO code such as en or it — extract only when explicitly stated. "
+        "Do not infer country from currency: multiple countries share the same currency. "
         "Extract every explicit constraint: size, material, material_percentage, style, color, forbidden designs, condition, and technical specs. "
         "Laptop/tech constraints (set only when explicitly stated): set product_type=\"laptop\" only when the user explicitly requests a laptop, notebook, or ThinkPad; "
         "set min_ram_gb/min_storage_gb as positive integers only for explicit minimum capacities (parse units like GB/TB into integer GB values where unambiguous); "
@@ -281,6 +356,9 @@ def parse_intent(text: str) -> dict:
         "Do not invent processor model details and keep GPU names separate from CPU requirements; "
         "set required_operating_system only when explicitly stated, and Do not infer Windows merely because the user asked for a laptop. "
         "Do not map min_ram_gb/min_storage_gb into min_specs. "
+        "Pack constraints: if the user explicitly states a pack quantity (e.g. \"5-pack\", \"confezione da 5\", \"paia 5\"), "
+        "set pack_quantity to that integer and pack_unit to the counted unit (e.g. \"pair\", \"piece\", \"set\"). "
+        "Do not invent pack quantity from ambiguous text. "
         "Do not invent missing requirements. Leave unspecified constraints as null. "
         "If a mandatory requirement cannot be represented, set clarification_required. "
         "User request: " + text

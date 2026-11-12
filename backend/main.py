@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, update_payment_capture, mark_payment_stale, save_session, get_session, list_executions, _connect, reserve_payment_atomic, init_attestations, save_attestation, get_attestation, list_attestations, get_attestations_for_rule
+from .storage import save_execution, get_execution, save_payment, get_payment_by_key, get_payment_by_id, get_payment_by_paypal_order_id, update_payment_capture, mark_payment_stale, save_session, get_session, list_executions, _connect, reserve_payment_atomic, init_attestations, save_attestation, get_attestation, list_attestations, get_attestations_for_rule
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .paypal_client import PayPalClient, PayPalAuthError
 from .intent_parser import parse_intent
-from .channel3_client import Channel3Client
+from .channel3_client import Channel3Client, build_channel3_filters
 from .policy_engine import evaluate, build_product_evidence_payload, canonical_fingerprint, POLICY_VERSION
 from .agent_council import AgentCouncil, ALL_AGENTS, AGENT_NAMES, sanitize_findings
 
@@ -58,6 +58,41 @@ def _category_slug(product) -> str:
     if isinstance(cat, dict):
         return str(cat.get("slug", "") or "")
     return ""
+
+
+def _text_mentions_pack_quantity(text: str) -> bool:
+    """Heuristic: the original request mentions a pack quantity (e.g. "5-pack",
+    "confezione da 5", "paia 5"). Used by lock completeness check to detect
+    when Gemini dropped pack_quantity from the mandate."""
+    if not text:
+        return False
+    low = text.lower()
+    import re
+    return bool(re.search(r"\b(\d+)\s*(?:-pack|pack|confezione|paia|paio|set)\b", low))
+
+
+def _enrich_search_query(mandate: dict) -> str:
+    """Enrich the Channel3 search query with explicit requirements from the
+    mandate that Gemini may have omitted from the extracted query string.
+
+    Preserves the original query text verbatim and appends only missing
+    explicit terms, such as pack quantity, so the upstream search receives
+    the complete intended search meaning.
+    """
+    query = mandate.get("query") or ""
+    pack_qty = mandate.get("pack_quantity")
+    if pack_qty is not None:
+        low = query.lower()
+        import re
+        pack_patterns = [
+            rf"{pack_qty}\s*-?\s*pack\b",
+            rf"\bpack\s+of\s+{pack_qty}\b",
+            rf"{pack_qty}\s*pairs?\b",
+        ]
+        has_pack = any(re.search(p, low) for p in pack_patterns)
+        if not has_pack:
+            query = f"{query} {pack_qty}-pack".strip()
+    return query
 
 
 def _is_laptop_category(product) -> bool:
@@ -120,8 +155,8 @@ async def create_intent(body: dict):
     if "max_price" in sf:
         mandate["max_price"] = sf.get("max_price")
     sid = str(uuid.uuid4())
-    sessions[sid] = {"mandate": mandate, "locked": False, "category": category, "structured_filters": sf}
-    save_session(sid, category, text, mandate, False, None, sf)
+    sessions[sid] = {"mandate": mandate, "locked": False, "category": category, "structured_filters": sf, "parsed_mandate": dict(parsed), "original_request": text}
+    save_session(sid, category, text, mandate, False, None, sf, original_request=text)
     return {"session_id": sid, "mandate": mandate}
 
 
@@ -131,17 +166,56 @@ async def lock_mandate(session_id: str):
     if not s:
         raise HTTPException(404, "session not found")
     m = s["mandate"]
-    # validate mandatory constraints
     sf = s.get("structured_filters") or {}
-    if sf.get("size") is not None and m.get("size") is None:
-        raise HTTPException(400, "Missing mandatory constraints")
-    if sf.get("material") is not None and m.get("material") is None:
-        raise HTTPException(400, "Missing mandatory constraints")
-    if sf.get("product_type") is not None and m.get("product_type") is None:
-        raise HTTPException(400, "Missing mandatory constraints")
+    parsed = s.get("parsed_mandate") or {}
+
+    # Completeness check part 1: every non-null value declared in
+    # structured_filters must be present in the mandate. The merge in
+    # create_intent puts structured_filters values into the mandate, so this
+    # normally passes; it catches cases where the mandate was altered after
+    # the merge or a required value was lost.
+    _field_map = {
+        "product_type": "product_type",
+        "size": "size",
+        "material": "material",
+        "material_percentage": "material_percentage",
+        "style": "style",
+        "color": "color",
+        "forbidden_designs": "forbidden_designs",
+        "max_price": "max_price",
+        "pack_quantity": "pack_quantity",
+        "country": "country",
+        "currency": "currency",
+        "language": "language",
+    }
+    missing = []
+    for sf_key, m_key in _field_map.items():
+        sf_val = sf.get(sf_key)
+        if sf_val is None or sf_val == "" or sf_val == []:
+            continue
+        m_val = m.get(m_key)
+        if m_val is None or m_val == "" or m_val == []:
+            missing.append(sf_key)
+
+    # Completeness check part 2: a requirement mentioned in the original
+    # natural-language text but not extracted by Gemini must block the lock.
+    # The only reliably detectable case today is pack quantity.
+    original_request = s.get("original_request") or ""
+    if _text_mentions_pack_quantity(original_request) and parsed.get("pack_quantity") is None:
+        if "pack_quantity" not in missing:
+            missing.append("pack_quantity")
+
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing mandatory constraints not represented in mandate: {', '.join(missing)}. Review the extracted mandate before locking.",
+        )
+
     s["locked"] = True
-    s["locked_mandate"] = dict(m)
-    save_session(session_id, s.get("category"), s.get("mandate",{}).get("query"), s["mandate"], True, s["locked_mandate"], s.get("structured_filters", {}))
+    locked_mandate = dict(m)
+    locked_mandate["_original_request"] = original_request
+    s["locked_mandate"] = locked_mandate
+    save_session(session_id, s.get("category"), s.get("mandate",{}).get("query"), s["mandate"], True, s["locked_mandate"], s.get("structured_filters", {}), original_request=original_request)
     return {"locked": True, "mandate": m}
 
 
@@ -153,30 +227,75 @@ async def search(session_id: str):
     mandate = s.get("locked_mandate") or s["mandate"]
     client = Channel3Client()
     try:
-        products = await client.search(mandate.get("query", ""))
+        # Category discovery: resolve the Channel3 category ID for the mandate's
+        # category slug, then use it as a structured filter so off-category
+        # results (bike components, t-shirts, underwear) are excluded upstream.
+        category_slug = None
+        cat = mandate.get("category")
+        if isinstance(cat, dict):
+            category_slug = cat.get("slug")
+        elif isinstance(cat, str):
+            category_slug = cat
+        category_id = None
+        if category_slug:
+            category_id = await client.resolve_category_id(category_slug)
+
+        filters = build_channel3_filters(mandate)
+        if filters is None:
+            filters = {}
+        if category_id:
+            filters["category_ids"] = [category_id]
+
+        products = await client.search(
+            _enrich_search_query(mandate),
+            filters=filters,
+            country=mandate.get("country") or "IT",
+            currency=mandate.get("currency") or "EUR",
+            language=mandate.get("language") or "en",
+        )
     except httpx.HTTPStatusError as exc:
         logging.warning("Channel3 upstream error: status %s", exc.response.status_code)
         raise HTTPException(status_code=502, detail="Product discovery temporarily unavailable") from exc
-    products = _reorder_products_for_computer_search(products, mandate)
+
+    # Fetch product details for all returned products with bounded concurrency,
+    # retry, and backoff. Details are needed for price/currency, size, color,
+    # pack quantity, variants, and branding evidence.
+    product_ids = [p.get("id") for p in products if isinstance(p, dict) and p.get("id")]
+    details_map = {}
+    if product_ids:
+        details_map = await client.get_product_details_batch(
+            product_ids,
+            max_concurrency=5,
+            country=mandate.get("country") or "IT",
+            currency=mandate.get("currency") or "EUR",
+            language=mandate.get("language") or "en",
+        )
+
     results = []
     for p in products:
-        if not p.get("material") and isinstance(p.get("materials"), list) and p["materials"]:
-            p["material"] = p["materials"][0]
-        offers = p.get("offers") if isinstance(p.get("offers"), list) else []
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("id")
+        # Prefer full details; fall back to search-result payload.
+        product = details_map.get(pid) if details_map.get(pid) is not None else p
+        # Merge search-level fields that details may not repeat.
+        if not product.get("material") and isinstance(p.get("materials"), list) and p["materials"]:
+            product["material"] = p["materials"][0]
+        offers = product.get("offers") if isinstance(product.get("offers"), list) else []
         if not offers:
             offers = [{}]
         for idx, offer in enumerate(offers):
             if not isinstance(offer, dict):
                 offer = {}
             if not offer.get("offer_id"):
-                offer["offer_id"] = f"{p.get('id', 'product')}-{idx}"
+                offer["offer_id"] = f"{product.get('id', 'product')}-{idx}"
             price_obj = offer.get("price") if isinstance(offer.get("price"), dict) else None
             price = price_obj.get("price") if isinstance(price_obj, dict) else (offer.get("price") if isinstance(offer, dict) else None)
             currency = (price_obj.get("currency") if isinstance(price_obj, dict) else None) or offer.get("currency") or mandate.get("currency", "EUR")
             if isinstance(offer, dict):
                 offer["price"] = {"price": price, "currency": currency} if isinstance(price_obj, dict) else offer.get("price")
-            ev = evaluate(mandate, build_product_evidence_payload(p, offer))
-            item = {"product": p, "gate": ev, "offer": offer}
+            ev = evaluate(mandate, build_product_evidence_payload(product, offer))
+            item = {"product": product, "gate": ev, "offer": offer}
             results.append(item)
     execution_id = str(uuid.uuid4())
     save_execution(execution_id, datetime.now(timezone.utc).isoformat(), mandate, results, session_id)
@@ -570,7 +689,17 @@ async def checkout_return(token: str = Query(...)):
         result = await client.get_order(token)
     except PayPalAuthError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    return {"order_id": result["order_id"], "status": result["status"]}
+    order_id = result["order_id"]
+    status = result["status"]
+    response = {"order_id": order_id, "status": status}
+    payment = get_payment_by_paypal_order_id(order_id)
+    if payment:
+        response["payment_id"] = payment["id"]
+        response["payment_status"] = payment["status"]
+        response["amount"] = payment["amount"]
+        response["currency"] = payment["currency"]
+        response["capture_id"] = payment.get("capture_id")
+    return response
 
 
 @app.get("/checkout/cancel")

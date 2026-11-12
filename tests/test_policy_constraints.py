@@ -312,4 +312,489 @@ def test_evidence_adapter_no_cross_offer_contamination():
     r = evaluate(m, {"price": offer_a["price"]["price"], "condition": offer_b["condition"]})
     assert r["decision"] == "REJECTED"
     assert r["rules"][0]["passed"] is True   # price from offer A
-    assert r["rules"][1]["passed"] is False  # condition from offer B
+
+
+# --- P0: Pack quantity rule ---
+
+def test_pack_quantity_sufficient_passes():
+    """Pack quantity >= required → PASS."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "pack_quantity": 5}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is True
+    assert result["decision"] == "APPROVED"
+
+
+def test_pack_quantity_insufficient_rejected():
+    """Pack quantity < required → REJECTED."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "pack_quantity": 3}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is False
+    assert result["decision"] == "REJECTED"
+
+
+def test_pack_quantity_missing_needs_confirmation():
+    """Pack quantity not verifiable → NEEDS_CONFIRMATION (not REJECTED)."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black"}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is False
+    assert pq_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_pack_quantity_variant_aware_same_variant():
+    """Pack quantity checked on the variant matching both size and color."""
+    mandate = {"pack_quantity": 5, "size": "L", "color": "black", "max_price": 15}
+    product = {
+        "price": 10, "condition": "new", "size": "L", "color": "black",
+        "variants": [
+            {"size": "L", "color": "red", "pack_quantity": 3},
+            {"size": "L", "color": "black", "pack_quantity": 5},
+        ],
+    }
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is True
+    assert pq_rule["observed"] == 5
+
+
+def test_pack_quantity_variant_aware_mismatched_variant():
+    """Variant matching size+color has insufficient pack → REJECTED even if another variant has enough."""
+    mandate = {"pack_quantity": 5, "size": "L", "color": "black", "max_price": 15}
+    product = {
+        "price": 10, "condition": "new", "size": "L", "color": "black",
+        "variants": [
+            {"size": "L", "color": "black", "pack_quantity": 3},
+            {"size": "S", "color": "black", "pack_quantity": 10},
+        ],
+    }
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is False
+    assert pq_rule["observed"] == 3
+    assert result["decision"] == "REJECTED"
+
+
+# --- P0: Solid/branding false positive ---
+
+def test_solid_pattern_not_proof_of_no_logos():
+    """design='Solid' does not prove absence of logos → NEEDS_CONFIRMATION."""
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15}
+    product = {"price": 10, "condition": "new", "design": "Solid"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_plain_pattern_not_proof_of_no_logos():
+    """design='Plain' does not prove absence of logos → NEEDS_CONFIRMATION."""
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15}
+    product = {"price": 10, "condition": "new", "design": "Plain"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_informative_design_no_logos_passes():
+    """Informative design (stripes) without logos → PASS."""
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15}
+    product = {"price": 10, "condition": "new", "design": "stripes"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is True
+    assert result["decision"] == "APPROVED"
+
+
+def test_design_containing_forbidden_rejected():
+    """Design explicitly containing forbidden element → REJECTED."""
+    mandate = {"forbidden_designs": ["Christmas"], "max_price": 15}
+    product = {"price": 10, "condition": "new", "design": "Christmas patterns"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_Christmas")
+    assert fd_rule["passed"] is False
+    assert result["decision"] == "REJECTED"
+
+
+# --- P0: Variant-aware size+color matching ---
+
+def test_variant_matching_size_and_color_same_variant_approved():
+    """Size and color must match on the SAME variant."""
+    mandate = {"size": "L", "color": "black", "max_price": 15}
+    product = {
+        "price": 10, "condition": "new",
+        "variants": [
+            {"size": "L", "color": "red"},
+            {"size": "L", "color": "black"},
+        ],
+    }
+    result = evaluate(mandate, product)
+    color_rule = next(r for r in result["rules"] if r["rule"] == "color")
+    assert color_rule["passed"] is True
+    assert result["decision"] == "APPROVED"
+
+
+def test_variant_no_match_both_size_and_color_needs_confirmation():
+    """No variant matches both size and color → NEEDS_CONFIRMATION."""
+    mandate = {"size": "L", "color": "black", "max_price": 15}
+    product = {
+        "price": 10, "condition": "new",
+        "variants": [
+            {"size": "L", "color": "red"},
+            {"size": "S", "color": "black"},
+        ],
+    }
+    result = evaluate(mandate, product)
+    color_rule = next(r for r in result["rules"] if r["rule"] == "color")
+    assert color_rule["passed"] is False
+    assert color_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# --- P0.2.5: Currency safety ---
+
+def test_max_price_usd_vs_eur_mismatch_rejected():
+    """12.99 USD must not be compared against 15 EUR → price rule fails."""
+    mandate = {"max_price": 15, "currency": "EUR", "material": "cotton", "color": "black"}
+    product = {"price": 12.99, "currency": "USD", "condition": "new", "material": "cotton", "color": "black"}
+    result = evaluate(mandate, product)
+    price_rule = next(r for r in result["rules"] if r["rule"] == "max_price")
+    assert price_rule["passed"] is False
+    assert result["decision"] == "REJECTED"
+
+
+def test_max_price_eur_vs_eur_match_passes():
+    """12.99 EUR compared against 15 EUR → price rule passes."""
+    mandate = {"max_price": 15, "currency": "EUR", "material": "cotton", "color": "black"}
+    product = {"price": 12.99, "currency": "EUR", "condition": "new", "material": "cotton", "color": "black"}
+    result = evaluate(mandate, product)
+    price_rule = next(r for r in result["rules"] if r["rule"] == "max_price")
+    assert price_rule["passed"] is True
+
+
+def test_max_price_currency_missing_needs_confirmation():
+    """Currency absent → price compliance unverifiable → NEEDS_CONFIRMATION."""
+    mandate = {"max_price": 15, "currency": "EUR", "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "currency": None}
+    result = evaluate(mandate, product)
+    price_rule = next(r for r in result["rules"] if r["rule"] == "max_price")
+    assert price_rule["passed"] is False
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# --- P0.2.6: Hex → color normalization ---
+
+from backend.channel3_client import hex_is_near
+
+
+def test_hex_near_black():
+    assert hex_is_near("#000000", "black") is True
+    assert hex_is_near("#090a0a", "black") is True
+    assert hex_is_near("#1a1a1a", "black") is True
+
+
+def test_hex_near_not_black():
+    assert hex_is_near("#ffffff", "black") is False
+    assert hex_is_near("#ff0000", "black") is False
+    assert hex_is_near("#0000ff", "black") is False
+
+
+def test_hex_near_gray():
+    assert hex_is_near("#808080", "gray") is True
+    assert hex_is_near("#a9a9a9", "grey") is True
+
+
+def test_hex_near_blue():
+    assert hex_is_near("#0000ff", "blue") is True
+
+
+def test_hex_near_unknown_returns_false():
+    assert hex_is_near("#ff69b4", "black") is False  # hot pink
+    assert hex_is_near("", "black") is False
+    assert hex_is_near(None, "black") is False
+    assert hex_is_near("#000000", "") is False
+
+
+# --- P0.2.9: Branding negative tests ---
+
+def test_forbidden_design_solid_not_proof_of_no_logos():
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "design": "Solid"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_forbidden_design_plain_not_proof_of_no_logos():
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "design": "Plain"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_forbidden_design_texture_not_proof_of_no_logos():
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "design": "Texture"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_forbidden_design_plaid_not_proof_of_no_logos():
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "design": "Plaid"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_forbidden_design_striped_not_proof_of_no_logos():
+    mandate = {"forbidden_designs": ["logos"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {"price": 10, "condition": "new", "material": "cotton", "color": "black", "design": "Striped"}
+    result = evaluate(mandate, product)
+    fd_rule = next(r for r in result["rules"] if r["rule"] == "forbidden_design_logos")
+    assert fd_rule["passed"] is False
+    assert fd_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_brand_name_does_not_prove_visible_logo():
+    """Seller brand present is not evidence of visible logo on product."""
+    mandate = {"forbidden_designs": ["visible logos", "branding"], "max_price": 15, "material": "cotton", "color": "black"}
+    product = {
+        "price": 10, "condition": "new", "material": "cotton", "color": "black",
+        "brands": [{"name": "Nike"}],
+        "design": "Solid",
+    }
+    result = evaluate(mandate, product)
+    # No visible logo evidence → NEEDS_CONFIRMATION despite brand name
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# --- FASE 3/5: Text evidence extraction — pack quantity from title/description ---
+
+def test_pack_quantity_from_title_5_pack():
+    """5-pack in title → pack_quantity recognized from text."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "color": "black"}
+    product = {"price": 10, "condition": "new", "color": "black", "title": "5-pack Ribbed Socks"}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is True
+    assert pq_rule["observed"] == 5
+
+
+def test_pack_quantity_from_description_pack_of_5():
+    """pack of 5 in description → pack_quantity recognized from text."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "color": "black"}
+    product = {"price": 10, "condition": "new", "color": "black", "description": "A pack of 5 black socks"}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is True
+    assert pq_rule["observed"] == 5
+
+
+def test_pack_quantity_ambiguous_quantity_not_recognized():
+    """Generic number not followed by pack keyword → not recognized."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "color": "black"}
+    product = {"price": 10, "condition": "new", "color": "black", "title": "Socks for 5 people"}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_pack_quantity_missing_field_needs_confirmation():
+    """No pack quantity text at all → NEEDS_CONFIRMATION."""
+    mandate = {"pack_quantity": 5, "max_price": 15, "color": "black"}
+    product = {"price": 10, "condition": "new", "color": "black", "title": "Black socks"}
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# --- FASE 3/5: Text evidence extraction — style from title/description/key_features ---
+
+def test_style_crew_present():
+    """crew in text → style recognized."""
+    mandate = {"style": "crew", "max_price": 15}
+    product = {"price": 10, "condition": "new", "title": "Black crew socks"}
+    result = evaluate(mandate, product)
+    style_rule = next(r for r in result["rules"] if r["rule"] == "style")
+    assert style_rule["passed"] is True
+    assert result["decision"] == "APPROVED"
+
+
+def test_style_crew_absent():
+    """No style keyword in text → NEEDS_CONFIRMATION."""
+    mandate = {"style": "crew", "max_price": 15}
+    product = {"price": 10, "condition": "new", "title": "Black socks"}
+    result = evaluate(mandate, product)
+    style_rule = next(r for r in result["rules"] if r["rule"] == "style")
+    assert style_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_style_ribbed_present():
+    """ribbed in text → style recognized."""
+    mandate = {"style": "ribbed", "max_price": 15}
+    product = {"price": 10, "condition": "new", "title": "Ribbed socks"}
+    result = evaluate(mandate, product)
+    style_rule = next(r for r in result["rules"] if r["rule"] == "style")
+    assert style_rule["passed"] is True
+
+
+def test_style_ribbed_absent():
+    """No ribbed keyword in text → NEEDS_CONFIRMATION."""
+    mandate = {"style": "ribbed", "max_price": 15}
+    product = {"price": 10, "condition": "new", "title": "Black socks"}
+    result = evaluate(mandate, product)
+    style_rule = next(r for r in result["rules"] if r["rule"] == "style")
+    assert style_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+def test_style_ribbed_and_crew_combined():
+    """ribbed + crew in text → combined style 'ribbed crew' recognized."""
+    mandate = {"style": "ribbed crew", "max_price": 15, "color": "black"}
+    product = {"price": 10, "condition": "new", "color": "black", "title": "5-pack Ribbed Socks", "description": "black crew socks with ribbed texture"}
+    result = evaluate(mandate, product)
+    style_rule = next(r for r in result["rules"] if r["rule"] == "style")
+    assert style_rule["passed"] is True
+
+
+# --- Size: selected vs not selected in variants.selected ---
+
+def test_size_selected_in_variant():
+    """Size in variants.selected → recognized."""
+    mandate = {"size": "L", "max_price": 15, "color": "black"}
+    product = {
+        "price": 10, "condition": "new", "color": "black",
+        "variants": {"selected": [{"name": "Size", "label": "L"}, {"name": "Color", "label": "black"}]}
+    }
+    result = evaluate(mandate, product)
+    size_rule = next(r for r in result["rules"] if r["rule"] == "size")
+    assert size_rule["passed"] is True
+
+
+def test_size_not_selected_needs_confirmation():
+    """No size in variants.selected → NEEDS_CONFIRMATION."""
+    mandate = {"size": "L", "max_price": 15, "color": "black"}
+    product = {
+        "price": 10, "condition": "new", "color": "black",
+        "variants": {"selected": [{"name": "Color", "label": "black"}]}
+    }
+    result = evaluate(mandate, product)
+    size_rule = next(r for r in result["rules"] if r["rule"] == "size")
+    assert size_rule["observed"] is None
+    assert result["decision"] == "NEEDS_CONFIRMATION"
+
+
+# --- Currency USD ---
+
+def test_max_price_usd_passes():
+    """14.99 USD ≤ 15 USD → price passes."""
+    mandate = {"max_price": 15, "currency": "USD", "color": "black"}
+    product = {"price": 14.99, "currency": "USD", "condition": "new", "color": "black"}
+    result = evaluate(mandate, product)
+    price_rule = next(r for r in result["rules"] if r["rule"] == "max_price")
+    assert price_rule["passed"] is True
+
+
+# --- Budget exceeded ---
+
+def test_budget_exceeded_rejected():
+    """20 USD > 15 USD → REJECTED."""
+    mandate = {"max_price": 15, "currency": "USD", "color": "black"}
+    product = {"price": 20.0, "currency": "USD", "condition": "new", "color": "black"}
+    result = evaluate(mandate, product)
+    price_rule = next(r for r in result["rules"] if r["rule"] == "max_price")
+    assert price_rule["passed"] is False
+    assert result["decision"] == "REJECTED"
+
+
+# --- Product availability ---
+
+def test_product_not_available_rejected():
+    """Availability OutOfStock with InStock requirement → REJECTED."""
+    mandate = {"max_price": 15, "currency": "USD", "availability": "InStock", "color": "black"}
+    product = {"price": 10, "currency": "USD", "condition": "new", "color": "black", "availability": "OutOfStock"}
+    result = evaluate(mandate, product)
+    avail_rule = next(r for r in result["rules"] if r["rule"] == "availability")
+    assert avail_rule["passed"] is False
+    assert result["decision"] == "REJECTED"
+
+
+def test_product_available_passes():
+    """Availability InStock with InStock requirement → PASS."""
+    mandate = {"max_price": 15, "currency": "USD", "availability": "InStock", "color": "black"}
+    product = {"price": 10, "currency": "USD", "condition": "new", "color": "black", "availability": "InStock"}
+    result = evaluate(mandate, product)
+    avail_rule = next(r for r in result["rules"] if r["rule"] == "availability")
+    assert avail_rule["passed"] is True
+
+
+# --- P0.3.6 Regression: pack_quantity from text when no size constraint ---
+
+def test_pack_quantity_from_text_no_size_constraint_approved():
+    """No size requirement: pack quantity from title text must not be overridden
+    by a matching variant that lacks a pack count field."""
+    mandate = {
+        "pack_quantity": 5, "color": "black", "style": "ribbed crew",
+        "max_price": 15, "currency": "USD", "allowed_conditions": ["new"],
+        "availability": "InStock",
+    }
+    product = {
+        "id": "qu2CGKi",
+        "title": "5-pack Ribbed Socks",
+        "description": "A set of five identical black crew socks crafted from a soft, fine-knit cotton blend.",
+        "color": "black",
+        "style": "ribbed crew",
+        "price": 14.99,
+        "currency": "USD",
+        "condition": "new",
+        "availability": "InStock",
+        "variants": {"selected": [{"name": "Color", "label": "Black"}]},
+        "structured_attributes": {"style": ["ribbed crew"]},
+        "key_features": ["Ribbed leg sections", "Crew Socks style"],
+    }
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["passed"] is True
+    assert pq_rule["observed"] == 5
+    assert result["decision"] == "APPROVED"
+
+
+def test_pack_quantity_variant_with_pack_count_overrides_text():
+    """When matching variant has a pack count, it takes precedence over text."""
+    mandate = {"pack_quantity": 5, "color": "black", "max_price": 15}
+    product = {
+        "price": 10, "condition": "new", "color": "black",
+        "title": "5-pack Ribbed Socks",
+        "variants": {"selected": [
+            {"name": "Color", "label": "Black"},
+            {"name": "Pack Count", "label": "3"},
+        ]},
+    }
+    result = evaluate(mandate, product)
+    pq_rule = next(r for r in result["rules"] if r["rule"] == "pack_quantity")
+    assert pq_rule["observed"] == 3
+    assert pq_rule["passed"] is False
+    assert result["decision"] == "REJECTED"

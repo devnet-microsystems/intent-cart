@@ -123,6 +123,16 @@ def get_payment_by_key(key):
     return {"id": row[0], "paypal_order_id": row[1], "status": row[2], "amount": row[3], "currency": row[4], "paypal_request_id": row[5], "stale_reason": row[6]}
 
 
+def get_payment_by_paypal_order_id(paypal_order_id):
+    init_payments()
+    conn = _connect()
+    row = conn.execute("SELECT id, session_id, execution_id, offer_id, paypal_order_id, status, amount, currency, capture_id, captured_amount, captured_currency FROM payments WHERE paypal_order_id=?", (paypal_order_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "session_id": row[1], "execution_id": row[2], "offer_id": row[3], "paypal_order_id": row[4], "status": row[5], "amount": row[6], "currency": row[7], "capture_id": row[8], "captured_amount": row[9], "captured_currency": row[10]}
+
+
 def mark_payment_stale(payment_id, reason, free_key=True):
     init_payments()
     conn = _connect()
@@ -204,30 +214,36 @@ def init_sessions():
         session_id TEXT PRIMARY KEY,
         category TEXT,
         query TEXT,
+        original_request TEXT,
         mandate TEXT,
         locked_mandate TEXT,
         locked INTEGER,
         structured_filters TEXT
     )""")
     conn.commit()
+    # migrate older schema: add original_request column if missing
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+    if "original_request" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN original_request TEXT")
+    conn.commit()
     conn.close()
 
-def save_session(session_id, category, query, mandate, locked, locked_mandate=None, structured_filters=None):
+def save_session(session_id, category, query, mandate, locked, locked_mandate=None, structured_filters=None, original_request=None):
     init_sessions()
     conn = _connect()
-    conn.execute("INSERT OR REPLACE INTO sessions (session_id,category,query,mandate,locked_mandate,locked,structured_filters) VALUES (?,?,?,?,?,?,?)",
-        (session_id, category, query, json.dumps(mandate), json.dumps(locked_mandate) if locked_mandate else None, 1 if locked else 0, json.dumps(structured_filters) if structured_filters is not None else None))
+    conn.execute("INSERT OR REPLACE INTO sessions (session_id,category,query,original_request,mandate,locked_mandate,locked,structured_filters) VALUES (?,?,?,?,?,?,?,?)",
+        (session_id, category, query, original_request, json.dumps(mandate), json.dumps(locked_mandate) if locked_mandate else None, 1 if locked else 0, json.dumps(structured_filters) if structured_filters is not None else None))
     conn.commit()
     conn.close()
 
 def get_session(session_id):
     init_sessions()
     conn = _connect()
-    row = conn.execute("SELECT session_id,category,query,mandate,locked_mandate,locked,structured_filters FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+    row = conn.execute("SELECT session_id,category,query,original_request,mandate,locked_mandate,locked,structured_filters FROM sessions WHERE session_id=?", (session_id,)).fetchone()
     conn.close()
     if not row:
         return None
-    return {"session_id": row[0], "category": row[1], "query": row[2], "mandate": json.loads(row[3]), "locked_mandate": json.loads(row[4]) if row[4] else None, "locked": bool(row[5]), "structured_filters": json.loads(row[6]) if row[6] else {}}
+    return {"session_id": row[0], "category": row[1], "query": row[2], "original_request": row[3], "mandate": json.loads(row[4]), "locked_mandate": json.loads(row[5]) if row[5] else None, "locked": bool(row[6]), "structured_filters": json.loads(row[7]) if row[7] else {}}
 
 
 def init_attestations():

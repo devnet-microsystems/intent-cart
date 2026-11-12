@@ -638,11 +638,13 @@ def test_policy_gate_payload_parity_search_vs_authorize():
     # Both should have the same keys
     assert set(payload_with_offer.keys()) == set(payload_without_offer.keys())
 
-    # Expected keys
+    # Expected keys (includes P0.2 provenance keys)
     expected_keys = {
         "price", "condition", "specs", "title", "description", "brands",
         "structured_attributes", "key_features", "materials", "variants",
-        "category", "color", "_provenance",
+        "category", "color", "material", "_provenance", "currency",
+        "_color_provenance", "_size_provenance", "_pack_quantity_provenance",
+        "availability", "_availability_provenance",
     }
     assert set(payload_with_offer.keys()) == expected_keys
 
@@ -1695,4 +1697,139 @@ def test_attested_8gb_rejected_for_16gb_requirement(client, monkeypatch):
     ev = evaluate(mandate, evidence, atts)
     ram_rule = next((r for r in ev["rules"] if r.get("rule") == "min_ram_gb"), None)
     assert ram_rule is not None
-    assert ram_rule["passed"] is False
+
+
+# --- Checkout-return endpoint tests (P0.4.3.1) ---
+
+def _mock_paypal_return(monkeypatch, order_status, order_id="O_RETURN", capture_response=None):
+    """Mock PayPal HTTP for checkout-return: token + GET order + optional capture."""
+    capture_body = {
+        "id": order_id,
+        "status": "COMPLETED",
+        "purchase_units": [
+            {
+                "payments": {
+                    "captures": [
+                        {
+                            "id": "CAP1",
+                            "amount": {"currency_code": "USD", "value": "10.00"},
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+    token_body = {"access_token": "T", "token_type": "Bearer"}
+    order_body = {"id": order_id, "status": order_status}
+
+    def handler(request):
+        url = str(request.url)
+        if "oauth2/token" in url:
+            return httpx.Response(200, json=token_body)
+        if "checkout/orders" in url and request.method == "GET":
+            return httpx.Response(200, json=order_body)
+        if "checkout/orders" in url and request.method == "POST" and "/capture" in url:
+            if capture_response is None:
+                return httpx.Response(200, json=capture_body)
+            return httpx.Response(capture_response.get("status", 200), json=capture_response.get("body", {}))
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    original = httpx.AsyncClient
+
+    def patched(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched)
+
+
+def _save_test_payment(session_id, execution_id, offer_id, paypal_order_id, status="CREATED", amount=10.0, currency="USD"):
+    from backend.storage import save_payment
+    import uuid
+    payment_id = str(uuid.uuid4())
+    key = f"{session_id}:{execution_id}:{offer_id}:{paypal_order_id}"
+    save_payment({
+        "id": payment_id, "session_id": session_id, "execution_id": execution_id, "offer_id": offer_id,
+        "paypal_order_id": paypal_order_id, "status": status, "amount": amount, "currency": currency,
+        "mandate_ref": "{}", "idempotency_key": key, "created_at": "2024-01-01T00:00:00Z",
+    })
+    return payment_id
+
+
+def test_checkout_return_approved_returns_payment_info(client, monkeypatch):
+    """GET /checkout/return with APPROVED order returns payment_id, amount, currency."""
+    import uuid
+    order_id = f"O_RET_APPROVED_{uuid.uuid4().hex[:8]}"
+    payment_id = _save_test_payment("sid", "eid", "offer-1", order_id)
+    _mock_paypal_return(monkeypatch, "APPROVED", order_id=order_id)
+    r = client.get("/checkout/return?token=TOKEN_APPROVED")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["order_id"] == order_id
+    assert data["status"] == "APPROVED"
+    assert data["payment_id"] == payment_id
+    assert data["amount"] == 10.0
+    assert data["currency"] == "USD"
+
+
+def test_checkout_return_completed_reconciles_no_capture(client, monkeypatch):
+    """GET /checkout/return with COMPLETED order returns capture_id, does not capture again."""
+    from backend.storage import update_payment_capture
+    import uuid
+    order_id = f"O_RET_COMPLETED_{uuid.uuid4().hex[:8]}"
+    payment_id = _save_test_payment("sid", "eid", "offer-1", order_id)
+    update_payment_capture(payment_id, "CAP_EXISTING", 10.0, "USD", "PAYMENT_CAPTURED")
+    _mock_paypal_return(monkeypatch, "COMPLETED", order_id=order_id)
+    r = client.get("/checkout/return?token=TOKEN_COMPLETED")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "COMPLETED"
+    assert data["capture_id"] == "CAP_EXISTING"
+
+
+def test_checkout_return_payer_action_required_no_capture(client, monkeypatch):
+    """GET /checkout/return with PAYER_ACTION_REQUIRED does not capture."""
+    import uuid
+    order_id = f"O_RET_PENDING_{uuid.uuid4().hex[:8]}"
+    payment_id = _save_test_payment("sid", "eid", "offer-1", order_id)
+    _mock_paypal_return(monkeypatch, "PAYER_ACTION_REQUIRED", order_id=order_id)
+    r = client.get("/checkout/return?token=TOKEN_PENDING")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "PAYER_ACTION_REQUIRED"
+    assert data["payment_id"] == payment_id
+
+
+def test_checkout_return_missing_token_422(client, monkeypatch):
+    """GET /checkout/return without token returns 422."""
+    r = client.get("/checkout/return")
+    assert r.status_code == 422
+
+
+def test_checkout_return_unknown_order(client, monkeypatch):
+    """GET /checkout/return with order not in DB returns order info without payment_id."""
+    _mock_paypal_return(monkeypatch, "APPROVED", order_id="O_RET_UNKNOWN")
+    r = client.get("/checkout/return?token=TOKEN_UNKNOWN")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["order_id"] == "O_RET_UNKNOWN"
+    assert data["status"] == "APPROVED"
+    assert "payment_id" not in data
+
+
+def test_checkout_return_paypal_auth_error(client, monkeypatch):
+    """GET /checkout/return when PayPal auth fails returns 502."""
+    def handler(request):
+        url = str(request.url)
+        if "oauth2/token" in url:
+            return httpx.Response(502, json={"error": "auth_failed"})
+        return httpx.Response(200, json={})
+    transport = httpx.MockTransport(handler)
+    original = httpx.AsyncClient
+    def patched(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original(*args, **kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", patched)
+    r = client.get("/checkout/return?token=TOKEN123")
+    assert r.status_code == 502

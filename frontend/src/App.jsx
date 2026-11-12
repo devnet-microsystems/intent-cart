@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
 import { themeQuartz, colorSchemeDarkBlue, ModuleRegistry, AllCommunityModule } from "ag-grid-community";
 
@@ -7,6 +7,7 @@ import AgentCouncil from "./AgentCouncil.jsx";
 import StatusPill from "./StatusPill.jsx";
 import PayPalButton from "./PayPalButton.jsx";
 import { apiFetch } from "./api/client.js";
+import { setPaypalSdkCurrency } from "./api/paypal-sdk.js";
 import "./App.css";
 
 const intentCartTheme = themeQuartz
@@ -55,7 +56,7 @@ export default function App() {
   const [councilLoading, setCouncilLoading] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
   const [category, setCategory] = useState("other");
-  const [filters, setFilters] = useState({ product_type: "", size: "", material: "", material_percentage: "", style: "", forbidden_designs: "", max_price: "", currency: "EUR", color: "" });
+  const [filters, setFilters] = useState({ product_type: "", size: "", material: "", material_percentage: "", style: "", forbidden_designs: "", max_price: "", currency: "EUR", color: "", pack_quantity: "" });
   const [showAll, setShowAll] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -71,7 +72,115 @@ export default function App() {
   const [attDraftConfirmed, setAttDraftConfirmed] = useState({});
   const [attDraftNotes, setAttDraftNotes] = useState({});
 
-  function summarizeStatus(results) {
+// --- PayPal checkout-return route handling ---
+const [crStage, setCrStage] = useState(null); // null | 'verifying' | 'capturing' | 'success' | 'failed' | 'cancelled' | 'pending'
+const [crMessage, setCrMessage] = useState(null);
+const [crAmount, setCrAmount] = useState(null);
+const [crCurrency, setCrCurrency] = useState(null);
+const [crCaptureId, setCrCaptureId] = useState(null);
+const crProcessed = useRef(false);
+
+useEffect(() => {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname;
+  if (!path.includes("/checkout/return") && !path.includes("/checkout/cancel")) return;
+  if (crProcessed.current) return;
+  crProcessed.current = true;
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token");
+  const payerID = params.get("PayerID");
+
+  if (path.includes("/checkout/cancel")) {
+    setCrStage("cancelled");
+    setCrMessage("Checkout was cancelled. No payment was captured.");
+    return;
+  }
+
+  if (!token) {
+    setCrStage("failed");
+    setCrMessage("No PayPal token provided in the return URL.");
+    return;
+  }
+
+  const handleReturn = async () => {
+    setCrStage("verifying");
+    try {
+      const res = await apiFetch(`/api/checkout/return?token=${encodeURIComponent(token)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setCrStage("failed");
+        setCrMessage(`Backend verification failed: ${body.detail || res.status}`);
+        return;
+      }
+      const data = await res.json();
+      const paypalStatus = data.status;
+      const paymentId = data.payment_id;
+      const amount = data.amount;
+      const currency = data.currency;
+      const existingCaptureId = data.capture_id;
+
+      if (amount) setCrAmount(String(amount));
+      if (currency) setCrCurrency(currency);
+
+      if (paypalStatus === "COMPLETED") {
+        // Already captured — reconcile, do not capture again.
+        setCrStage("success");
+        setCrCaptureId(existingCaptureId || null);
+        setCrMessage(`Purchase complete. Order ${data.order_id} was already captured.`);
+        return;
+      }
+
+      if (paypalStatus === "APPROVED") {
+        if (!paymentId) {
+          setCrStage("failed");
+          setCrMessage("Order is APPROVED but no payment record found. Contact support.");
+          return;
+        }
+        setCrStage("capturing");
+        const capRes = await apiFetch("/api/orders/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payment_id: paymentId }),
+        });
+        if (!capRes.ok) {
+          const body = await capRes.json().catch(() => ({}));
+          setCrStage("failed");
+          setCrMessage(`Capture failed: ${body.detail || capRes.status}`);
+          return;
+        }
+        const capData = await capRes.json();
+        setCrStage("success");
+        setCrCaptureId(capData.capture_id || null);
+        setCrMessage(`Purchase complete. Captured ${capData.amount} ${capData.currency}. Capture ID: ${capData.capture_id}`);
+        return;
+      }
+
+      if (paypalStatus === "PAYER_ACTION_REQUIRED") {
+        setCrStage("pending");
+        setCrMessage(`Order ${data.order_id} is awaiting buyer approval. Please complete approval on PayPal and return here.`);
+        return;
+      }
+
+      setCrStage("failed");
+      setCrMessage(`Unexpected PayPal status: ${paypalStatus}`);
+    } catch (e) {
+      setCrStage("failed");
+      setCrMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  handleReturn();
+}, []);
+
+useEffect(() => {
+  const currency = selected?.offer?.price?.currency;
+  if (currency) {
+    setPaypalSdkCurrency(currency);
+  }
+}, [selected?.offer?.price?.currency]);
+
+function summarizeStatus(results) {
     if (!results || results.length === 0) return null;
     const approved = results.filter((r) => r.gate?.decision === "APPROVED").length;
     const rejected = results.filter((r) => r.gate?.decision === "REJECTED").length;
@@ -194,6 +303,7 @@ export default function App() {
         forbidden_designs: filters.forbidden_designs ? filters.forbidden_designs.split(",").map(s=>s.trim()).filter(Boolean) : [],
         max_price: filters.max_price === "" ? null : Number(filters.max_price),
         currency: filters.currency || "EUR",
+        pack_quantity: filters.pack_quantity === "" ? null : Number(filters.pack_quantity),
       } : null;
       const res = await apiFetch("/api/intent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: searchText, category, structured_filters: structured }) });
       if (!res.ok) throw new Error("Intent extraction failed");
@@ -482,6 +592,45 @@ export default function App() {
     }
   };
 
+  // --- Checkout-return route rendering ---
+  if (crStage !== null) {
+    const stageConfig = {
+      verifying: { title: "Verifying payment…", msg: crMessage || "Contacting PayPal to verify your order." },
+      capturing: { title: "Capturing payment…", msg: crMessage || "Finalizing your purchase with PayPal." },
+      success: { title: "Purchase complete", msg: crMessage || "Your order has been captured successfully." },
+      failed: { title: "Checkout failed", msg: crMessage || "An error occurred during checkout." },
+      pending: { title: "Waiting for buyer approval", msg: crMessage || "Your PayPal order is awaiting approval." },
+      cancelled: { title: "Checkout cancelled", msg: crMessage || "The PayPal checkout was cancelled." },
+    }[crStage] || { title: "Checkout return", msg: crMessage || "" };
+
+    return (
+      <div className="app" style={{ padding: 40, textAlign: "center" }}>
+        <header className="topbar">
+          <div className="brand">
+            <div className="brand-mark">IC</div>
+            <div>
+              <div className="brand-name">INTENT CART</div>
+              <div className="brand-sub">Checkout Return</div>
+            </div>
+          </div>
+        </header>
+        <section className="card" style={{ maxWidth: 500, margin: "0 auto" }}>
+          <h2 style={{ marginTop: 0 }}>{stageConfig.title}</h2>
+          <p>{stageConfig.msg}</p>
+          {(crStage === "success" || crStage === "pending") && crCaptureId && (
+            <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Capture ID: {crCaptureId}</p>
+          )}
+          {(crAmount || crCurrency) && (
+            <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Amount: {crAmount} {crCurrency}</p>
+          )}
+          <button onClick={() => window.location.replace("/")} className="primary" style={{ marginTop: 16 }}>
+            Return to store
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -558,6 +707,10 @@ export default function App() {
               <div className="filter-field">
                 <label className="filter-label">Color</label>
                 <input className="filter-input" placeholder="e.g. black" value={filters.color} onChange={(e)=>setFilters({...filters,color:e.target.value})} />
+              </div>
+              <div className="filter-field">
+                <label className="filter-label">Pack quantity</label>
+                <input className="filter-input" placeholder="e.g. 5" value={filters.pack_quantity} onChange={(e)=>setFilters({...filters,pack_quantity:e.target.value})} />
               </div>
               <div className="filter-field">
                 <label className="filter-label">Excluded designs</label>
@@ -662,6 +815,12 @@ export default function App() {
                         <div className="constraint-list">
                           {mandateView?.max_price != null && (
                             <span className="tag priority-required kind-required">Max price {mandateView.max_price} {mandateView.currency}</span>
+                          )}
+                          {mandateView?.color && (
+                            <span className="tag priority-required kind-required">Color {mandateView.color}</span>
+                          )}
+                          {mandateView?.pack_quantity != null && (
+                            <span className="tag priority-required kind-required">Pack {mandateView.pack_quantity}</span>
                           )}
                           {mandateView?.material && (
                             <span className="tag priority-required kind-required">{mandateView.material}</span>

@@ -370,3 +370,225 @@ def test_parse_intent_prompt_includes_laptop_extraction_rules():
     assert "min_specs" in prompt  # explicit instruction not to map
     assert "SSD/HDD describe storage media" in prompt
     assert "Intel Core Ultra 7" in prompt
+
+
+# --- Pack quantity (P0 purchase path) ---
+
+def test_mandate_schema_accepts_pack_quantity():
+    m = Mandate(query="5-pack black socks", pack_quantity=5, pack_unit="pair")
+    assert m.pack_quantity == 5
+    assert m.pack_unit == "pair"
+
+
+def test_mandate_schema_pack_quantity_defaults_none():
+    m = Mandate(query="black socks")
+    assert m.pack_quantity is None
+    assert m.pack_unit is None
+
+
+def test_mandate_schema_pack_quantity_rejects_zero_and_negative():
+    with pytest.raises(ValidationError):
+        Mandate(query="socks", pack_quantity=0)
+    with pytest.raises(ValidationError):
+        Mandate(query="socks", pack_quantity=-5)
+
+
+def test_mandate_schema_pack_quantity_rejects_non_integer():
+    with pytest.raises(ValidationError):
+        Mandate(query="socks", pack_quantity="5")
+    with pytest.raises(ValidationError):
+        Mandate(query="socks", pack_quantity=True)
+
+
+def test_parse_intent_extracts_pack_quantity_from_structured_response():
+    payload = {
+        "query": "5-pack black cotton crew socks",
+        "pack_quantity": 5,
+        "pack_unit": "pair",
+        "color": "black",
+        "material": "cotton",
+        "size": "43-46",
+        "max_price": 15,
+        "currency": "EUR",
+        "forbidden_designs": ["logos"],
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["pack_quantity"] == 5
+    assert result["pack_unit"] == "pair"
+    assert result["color"] == "black"
+    assert result["material"] == "cotton"
+    assert result["size"] == "43-46"
+    assert result["max_price"] == 15
+    assert result["forbidden_designs"] == ["logos"]
+
+
+def test_parse_intent_prompt_includes_pack_quantity_instruction():
+    _mock_parse_with_payload({"query": "5-pack socks", "pack_quantity": 5, "pack_unit": "pair"})
+    prompt = _mock_parse_with_payload.last_kwargs["contents"]
+    assert "Pack constraints" in prompt
+    assert "pack_quantity" in prompt
+    assert "Do not invent pack quantity" in prompt
+
+
+# --- Intent fidelity (P0.4.2) ---
+
+def test_style_merged_from_technical_specs_list():
+    """Style keywords in technical_specs list are merged into style field."""
+    payload = {
+        "query": "black ribbed crew socks",
+        "style": "crew",
+        "color": "black",
+        "technical_specs": ["ribbed", "cotton"],
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["style"] == "ribbed crew"
+    assert result["technical_specs"] == ["cotton"]
+
+
+def test_style_merged_from_technical_specs_dict():
+    """Style keywords in technical_specs dict values are merged into style field."""
+    payload = {
+        "query": "black ribbed crew socks",
+        "style": "crew",
+        "color": "black",
+        "technical_specs": {"pattern": "ribbed", "material": "cotton"},
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["style"] == "ribbed crew"
+    assert result["technical_specs"] == {"material": "cotton"}
+
+
+def test_style_ribbbed_not_lost_when_in_technical_specs():
+    """'ribbed' cannot disappear from the structured mandate when it appears in technical_specs."""
+    payload = {
+        "query": "black ribbed crew socks 5-pack",
+        "style": "crew",
+        "color": "black",
+        "pack_quantity": 5,
+        "technical_specs": ["ribbed"],
+        "max_price": 15,
+        "currency": "USD",
+        "allowed_conditions": ["new"],
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["style"] == "ribbed crew", f"Expected 'ribbed crew', got {result['style']!r}"
+
+
+def test_style_canonical_ordering():
+    """Style keywords are ordered canonically (ribbed before crew)."""
+    payload = {
+        "query": "black crew ribbed socks",
+        "style": "crew ribbed",
+        "color": "black",
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["style"] == "ribbed crew"
+
+
+def test_style_unchanged_when_no_technical_specs_overlap():
+    """Style field is unchanged when technical_specs has no style keywords."""
+    payload = {
+        "query": "black crew socks",
+        "style": "crew",
+        "color": "black",
+        "technical_specs": ["cotton", "polyester"],
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["style"] == "crew"
+    assert result["technical_specs"] == ["cotton", "polyester"]
+
+
+def test_pack_quantity_preserved_in_parsed_mandate():
+    """Pack quantity is preserved from parsed mandate through validation."""
+    payload = {
+        "query": "5-pack black ribbed crew socks",
+        "pack_quantity": 5,
+        "pack_unit": "pair",
+        "color": "black",
+        "style": "ribbed crew",
+        "max_price": 15,
+        "currency": "USD",
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["pack_quantity"] == 5
+    assert result["pack_unit"] == "pair"
+
+
+# --- Market context (P0.4.1) ---
+
+def test_mandate_schema_market_context_defaults_none():
+    """country and language default to None; currency defaults to EUR."""
+    m = Mandate(query="black socks")
+    d = m.model_dump()
+    assert d["country"] is None
+    assert d["currency"] == "EUR"
+    assert d["language"] is None
+
+
+def test_mandate_schema_market_context_explicit_values():
+    """Explicit market context values are accepted and preserved."""
+    m = Mandate(query="black socks", country="US", currency="USD", language="en")
+    d = m.model_dump()
+    assert d["country"] == "US"
+    assert d["currency"] == "USD"
+    assert d["language"] == "en"
+
+
+def test_mandate_schema_currency_not_inferred_from_country():
+    """Country does not force currency; they are independent fields."""
+    m = Mandate(query="black socks", country="US", currency="EUR")
+    assert m.country == "US"
+    assert m.currency == "EUR"
+
+
+def test_parse_intent_prompt_includes_market_context_instruction():
+    """Gemini prompt instructs extraction of country/language from explicit text only."""
+    _mock_parse_with_payload({"query": "black socks", "country": "US", "currency": "USD", "language": "en"})
+    prompt = _mock_parse_with_payload.last_kwargs["contents"]
+    assert "country" in prompt
+    assert "language" in prompt
+    assert "Do not infer country from currency" in prompt
+
+
+def test_parse_intent_extracts_market_context_from_structured_response():
+    """Market context fields survive parsing and validation."""
+    payload = {
+        "query": "black ribbed crew socks 5-pack",
+        "country": "US",
+        "currency": "USD",
+        "language": "en",
+        "color": "black",
+        "style": "ribbed crew",
+        "pack_quantity": 5,
+        "max_price": 15,
+        "allowed_conditions": ["new"],
+        "min_specs": {},
+    }
+    result = _mock_parse_with_payload(payload)
+    assert result["country"] == "US"
+    assert result["currency"] == "USD"
+    assert result["language"] == "en"
+
+
+def test_legacy_mandate_without_market_context_compatible():
+    """Historical sessions without country/language still validate."""
+    old = {
+        "query": "black socks",
+        "max_price": 15,
+        "currency": "EUR",
+        "allowed_conditions": ["new"],
+        "color": "black",
+        "min_specs": {},
+    }
+    m = Mandate.model_validate(old)
+    d = m.model_dump()
+    assert d["country"] is None
+    assert d["language"] is None
+    assert d["currency"] == "EUR"

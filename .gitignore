@@ -24,3 +24,4 @@ executions.db
 # Local tooling / OS
 .kilo/
 .DS_Store
+.vercel
